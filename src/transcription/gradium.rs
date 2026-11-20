@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use color_eyre::eyre::{Result, WrapErr, eyre};
+use color_eyre::eyre::{eyre, Result, WrapErr};
 use serde::Deserialize;
 
 pub(crate) mod learning;
@@ -35,8 +35,9 @@ pub(crate) struct Config {
     /// Correct and learn from vocabulary and mishearings. On by default.
     #[serde(default)]
     pub learn: Option<bool>,
-    /// Word pairs to apply and boost ahead of anything learned, "fonon" to
-    /// "Phonon". Each side is one word; they match whole tokens.
+    /// Word or phrase pairs to apply and boost ahead of anything learned,
+    /// "fonon" to "Phonon" or a whole spoken email to the address. Matching
+    /// ignores case and the punctuation between the words.
     #[serde(default)]
     pub corrections: BTreeMap<String, String>,
 }
