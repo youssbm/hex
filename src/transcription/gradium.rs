@@ -65,7 +65,13 @@ pub(crate) fn transcribe(config: &Config, samples: &[f32], selection: &str) -> R
     let started = Instant::now();
     let language = language(config, selection);
     let model = config.model.as_deref().unwrap_or("default");
-    let json_config = serde_json::json!({ "language": &language }).to_string();
+    // 10 frames (800 ms) of context is the realtime default; the REST
+    // endpoint otherwise waits 50 frames (4 s) before its first segment.
+    let json_config = serde_json::json!({
+        "language": &language,
+        "delay_in_frames": 10,
+    })
+    .to_string();
 
     let mut url = url::Url::parse(ENDPOINT)?;
     url.query_pairs_mut()
