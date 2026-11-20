@@ -13,6 +13,7 @@ pub(crate) mod engine;
 pub(crate) mod file_transcript;
 pub(crate) mod found_models;
 pub(crate) mod gguf_header;
+pub(crate) mod gradium;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) mod gguf_session;
 #[cfg(any(target_os = "linux", target_os = "windows"))]

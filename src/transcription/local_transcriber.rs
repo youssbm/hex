@@ -413,9 +413,13 @@ impl LocalTranscriber {
             prewarm_ms = started.elapsed().as_millis(),
             "prewarmed local transcription model"
         );
-        transcriber.stream = transcriber
-            .session
-            .probe_stream(&transcriber.options, &architecture);
+        transcriber.stream = if crate::transcription::gradium::active().is_some() {
+            None
+        } else {
+            transcriber
+                .session
+                .probe_stream(&transcriber.options, &architecture)
+        };
         // Warm now, so this times the device rather than its first run's
         // shader compiles.
         let started = Instant::now();
@@ -717,6 +721,19 @@ impl LocalTranscriber {
     }
 
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<String> {
+        if let Some(config) = crate::transcription::gradium::active() {
+            match crate::transcription::gradium::transcribe(
+                &config,
+                samples,
+                &self.selection.language,
+            ) {
+                Ok(text) => return Ok(text),
+                Err(error) => tracing::warn!(
+                    error = format!("{error:#}"),
+                    "Gradium transcription failed; falling back to the local model"
+                ),
+            }
+        }
         let run = |this: &mut Self| {
             this.session
                 .transcribe_chunked(samples, &this.options, this.max_audio_samples)

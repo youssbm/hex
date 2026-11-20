@@ -1,0 +1,41 @@
+name: Build Gradium Hex
+
+# Builds Hex with Gradium speech-to-text for Windows x64. Manual only: the
+# result is downloaded from the run's artifacts into a managed Hex install.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      # Portable CPU kernels: without this, ggml tunes to the runner's CPU.
+      TRANSCRIBE_CMAKE_ARGS: -DGGML_NATIVE=OFF
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          env-vars: INCLUDE LIB ImageVersion
+      - name: Install the Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
+      - name: Install SPIRV-Headers for the Vulkan backend
+        shell: pwsh
+        run: |
+          vcpkg install spirv-headers:x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install spirv-headers failed" }
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" -replace '\\','/'
+          $combined = if ($env:CMAKE_PREFIX_PATH) { "$prefix;$env:CMAKE_PREFIX_PATH" } else { $prefix }
+          Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$combined"
+      - run: cargo build --locked --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hex-windows-x64-gradium
+          path: target/release/hex.exe
