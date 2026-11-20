@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use serde::Deserialize;
 
-mod learning;
+pub(crate) mod learning;
 
 const ENDPOINT: &str = "https://api.gradium.ai/api/speech/asr";
 /// A transcript is a few KiB; anything past this is a broken answer.
@@ -72,6 +72,11 @@ pub(crate) fn active() -> Option<Config> {
     let path = crate::app_paths::support_dir().ok()?.join("gradium.json");
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// Whether to correct transcripts and watch an edited field for corrections.
+pub(crate) fn learning_enabled() -> bool {
+    active().is_some_and(|config| config.learn.unwrap_or(true))
 }
 
 /// Transcribes a complete 16 kHz mono clip. Returns an error, rather than an

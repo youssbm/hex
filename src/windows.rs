@@ -1,6 +1,7 @@
 pub(crate) mod app;
 pub(crate) mod audio_control;
 pub(crate) mod context;
+pub(crate) mod corrections;
 pub(crate) mod dictation;
 pub(crate) mod gpu_fallback;
 pub(crate) mod input;

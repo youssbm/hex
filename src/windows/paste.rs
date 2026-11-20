@@ -385,6 +385,7 @@ impl WindowsPaster {
             return Err(error);
         }
         // Only a paste that reached the app is continued by the next one.
+        crate::windows::corrections::watch(target.window, text.clone());
         self.continuation.record(revision, true, text);
         let Some(generation) = generation else {
             return Ok(Paste::Sent);

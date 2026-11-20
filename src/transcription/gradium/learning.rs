@@ -248,6 +248,86 @@ fn push_keyword(words: &mut Vec<String>, seen: &mut HashSet<String>, term: &str)
     }
 }
 
+/// The one-for-one word changes from `before` to `after`, when the edit
+/// touched at most three words. `None` for insertions, deletions, or wider
+/// edits, so a watcher keeps waiting instead of learning noise.
+pub(crate) fn corrections_between(before: &str, after: &str) -> Option<Vec<(String, String)>> {
+    let left = words(before);
+    let right = words(after);
+    if left == right {
+        return None;
+    }
+    let mut prefix = 0;
+    while prefix < left.len() && prefix < right.len() && left[prefix] == right[prefix] {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < left.len().saturating_sub(prefix)
+        && suffix < right.len().saturating_sub(prefix)
+        && left[left.len() - 1 - suffix] == right[right.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    let left_middle = &left[prefix..left.len() - suffix];
+    let right_middle = &right[prefix..right.len() - suffix];
+    if left_middle.is_empty() || right_middle.is_empty() {
+        return None;
+    }
+    if left_middle.len() != right_middle.len() || left_middle.len() > 3 {
+        return None;
+    }
+    let pairs: Vec<(String, String)> = left_middle
+        .iter()
+        .zip(right_middle)
+        .filter(|(before, after)| before != after)
+        .map(|(before, after)| (before.clone(), after.clone()))
+        .collect();
+    (!pairs.is_empty()).then_some(pairs)
+}
+
+/// Whether two texts share a word of four characters or more, so a field is
+/// the one the dictation landed in rather than an unrelated control.
+pub(crate) fn shares_word(left: &str, right: &str) -> bool {
+    words(left)
+        .iter()
+        .any(|word| word.chars().count() >= 4 && contains_word(right, word))
+}
+
+/// Whether `text` holds `word`, ignoring case and surrounding punctuation.
+pub(crate) fn contains_word(text: &str, word: &str) -> bool {
+    words(text)
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(word))
+}
+
+fn words(text: &str) -> Vec<String> {
+    word_spans(text)
+        .into_iter()
+        .map(|(start, end)| text[start..end].to_owned())
+        .collect()
+}
+
+/// Records a correction the person made by hand. Returns whether the
+/// dictionary changed; a repeat of a pair it already knows is not new.
+pub(crate) fn remember(heard: &str, right: &str) -> bool {
+    let heard = heard.trim();
+    let right = right.trim();
+    if heard.is_empty() || right.is_empty() || heard == right {
+        return false;
+    }
+    let mut learned = Learned::load();
+    if learned
+        .corrections
+        .iter()
+        .any(|correction| correction.heard.eq_ignore_ascii_case(heard) && correction.right == right)
+    {
+        return false;
+    }
+    learned.learn(heard, right);
+    learned.save();
+    true
+}
+
 /// A one-edit mishearing of a term long enough that a common word is
 /// unlikely to collide. Same first letter, so "rest" never becomes "Rust".
 fn fuzzy(word: &str, entries: &[VocabularyEntry]) -> Option<String> {
@@ -430,6 +510,44 @@ mod tests {
         ];
         let words = keywords(&entries, &Learned::default(), &[]);
         assert_eq!(words, vec!["Rune"]);
+    }
+
+    #[test]
+    fn a_selected_word_retyped_is_a_correction() {
+        let pairs = corrections_between("Gradiom is the name", "Gradium is the name").unwrap();
+        assert_eq!(pairs, vec![("Gradiom".to_owned(), "Gradium".to_owned())]);
+    }
+
+    #[test]
+    fn a_case_only_edit_counts() {
+        let pairs = corrections_between("ask github now", "ask GitHub now").unwrap();
+        assert_eq!(pairs, vec![("github".to_owned(), "GitHub".to_owned())]);
+    }
+
+    #[test]
+    fn punctuation_insertions_and_deletions_are_not_corrections() {
+        assert!(corrections_between("hello, world", "hello world").is_none());
+        assert!(corrections_between("hello", "hello there").is_none());
+        assert!(corrections_between("hello there", "hello").is_none());
+    }
+
+    #[test]
+    fn up_to_three_replaced_words_are_learned() {
+        let pairs = corrections_between("a b c d", "a x y d").unwrap();
+        assert_eq!(
+            pairs,
+            vec![
+                ("b".to_owned(), "x".to_owned()),
+                ("c".to_owned(), "y".to_owned())
+            ]
+        );
+        assert!(corrections_between("a b c d e", "a v w x y").is_none());
+    }
+
+    #[test]
+    fn shared_words_ignore_short_ones() {
+        assert!(shares_word("Gradium is here", "gradium"));
+        assert!(!shares_word("the cat", "a cat"));
     }
 
     #[test]
