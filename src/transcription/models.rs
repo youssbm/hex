@@ -429,7 +429,7 @@ const SPEECH_DETECTOR_NAME: &str = "the speech detector";
 pub const MODELS: &[ModelDefinition] = &[
     ModelDefinition {
         id: TranscriptionModelId::ParakeetUnifiedEnglish,
-        name: "Parakeet Unified English",
+        name: "Gradium (Parakeet fallback)",
         realtime: "~163x",
         word_error_rate: Some(1.60),
         streams: true,
