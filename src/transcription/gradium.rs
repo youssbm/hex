@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use serde::Deserialize;
-use ureq::ResponseExt;
 
 mod learning;
 
@@ -36,8 +35,8 @@ pub(crate) struct Config {
     /// Correct and learn from vocabulary and mishearings. On by default.
     #[serde(default)]
     pub learn: Option<bool>,
-    /// Pairs to apply and boost ahead of anything learned, "fonon" to
-    /// "Phonon".
+    /// Word pairs to apply and boost ahead of anything learned, "fonon" to
+    /// "Phonon". Each side is one word; they match whole tokens.
     #[serde(default)]
     pub corrections: BTreeMap<String, String>,
 }
@@ -56,6 +55,9 @@ fn env_config() -> Config {
         api_key: env_key().unwrap_or_default(),
         language: std::env::var("GRADIUM_LANGUAGE").ok(),
         model: std::env::var("GRADIUM_MODEL").ok(),
+        boost: None,
+        learn: None,
+        corrections: BTreeMap::new(),
     }
 }
 
