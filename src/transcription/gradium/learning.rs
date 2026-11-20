@@ -210,6 +210,8 @@ impl Learned {
 /// Words Gradium is told to expect on the next clip: the vocabulary first,
 /// then the configured and learned corrections. Multi-word entries and pure
 /// numbers are dropped because Gradium matches keywords token by token.
+/// Misheard spellings are deliberately left out: boosting them would teach
+/// the model the wrong spelling; they only feed the local corrections.
 pub(crate) fn keywords(
     entries: &[VocabularyEntry],
     learned: &Learned,
@@ -219,9 +221,6 @@ pub(crate) fn keywords(
     let mut words = Vec::new();
     for entry in entries {
         push_keyword(&mut words, &mut seen, &entry.term);
-        for sound in &entry.sounds_like {
-            push_keyword(&mut words, &mut seen, sound);
-        }
     }
     for term in &learned.terms {
         push_keyword(&mut words, &mut seen, &term.term);
@@ -430,7 +429,7 @@ mod tests {
             entry("Rune", &["rune's"]),
         ];
         let words = keywords(&entries, &Learned::default(), &[]);
-        assert_eq!(words, vec!["Rune", "rune's"]);
+        assert_eq!(words, vec!["Rune"]);
     }
 
     #[test]
