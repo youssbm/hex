@@ -5,11 +5,14 @@
 //! instead of the local GGUF model. The rest of the pipeline (HUD, output
 //! processing, history, paste) is unchanged: Gradium supplies only the text.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use serde::Deserialize;
 use ureq::ResponseExt;
+
+mod learning;
 
 const ENDPOINT: &str = "https://api.gradium.ai/api/speech/asr";
 /// A transcript is a few KiB; anything past this is a broken answer.
@@ -18,7 +21,8 @@ const DEADLINE: Duration = Duration::from_secs(60);
 const SAMPLE_RATE: u32 = 16_000;
 
 /// `%APPDATA%\hex\gradium.json`:
-/// `{"api_key": "gsk_…", "language": "en", "model": "default"}`.
+/// `{"api_key": "gsk_…", "language": "en", "model": "default",
+///   "boost": 3, "learn": true, "corrections": {"fonon": "Phonon"}}`.
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct Config {
     pub api_key: String,
@@ -26,6 +30,16 @@ pub(crate) struct Config {
     pub language: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Gradium's keyword boost, -6 to 6. 3 is its recommended default.
+    #[serde(default)]
+    pub boost: Option<i32>,
+    /// Correct and learn from vocabulary and mishearings. On by default.
+    #[serde(default)]
+    pub learn: Option<bool>,
+    /// Pairs to apply and boost ahead of anything learned, "fonon" to
+    /// "Phonon".
+    #[serde(default)]
+    pub corrections: BTreeMap<String, String>,
 }
 
 /// The key from the environment wins, so a terminal launch can test another
@@ -65,13 +79,30 @@ pub(crate) fn transcribe(config: &Config, samples: &[f32], selection: &str) -> R
     let started = Instant::now();
     let language = language(config, selection);
     let model = config.model.as_deref().unwrap_or("default");
+    let boost = config.boost.unwrap_or(3).clamp(-6, 6);
+    let learn = config.learn.unwrap_or(true);
+    let configured: Vec<(String, String)> = config
+        .corrections
+        .iter()
+        .map(|(heard, right)| (heard.clone(), right.clone()))
+        .collect();
+    let entries = crate::dictation::vocabulary::entries();
+    let mut learned = learning::Learned::load();
+    let words = learning::keywords(&entries, &learned, &configured);
+
     // 10 frames (800 ms) of context is the realtime default; the REST
     // endpoint otherwise waits 50 frames (4 s) before its first segment.
-    let json_config = serde_json::json!({
+    let mut request_config = serde_json::json!({
         "language": &language,
         "delay_in_frames": 10,
-    })
-    .to_string();
+    });
+    if !words.is_empty() {
+        request_config["keywords"] = serde_json::json!({
+            "words": &words,
+            "boost": boost,
+        });
+    }
+    let json_config = request_config.to_string();
 
     let mut url = url::Url::parse(ENDPOINT)?;
     url.query_pairs_mut()
@@ -109,9 +140,17 @@ pub(crate) fn transcribe(config: &Config, samples: &[f32], selection: &str) -> R
     }
 
     let transcript = parse(&body)?;
+    let (transcript, corrected, learned_pairs) = if learn {
+        learned.apply(&transcript, &entries, &configured)
+    } else {
+        (transcript, 0, 0)
+    };
     tracing::info!(
         ms = started.elapsed().as_millis(),
         language = %language,
+        keywords = words.len(),
+        corrected,
+        learned = learned_pairs,
         chars = transcript.chars().count(),
         "transcribed a clip with Gradium"
     );
