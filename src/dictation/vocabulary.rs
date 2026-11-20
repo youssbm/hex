@@ -171,31 +171,28 @@ pub(crate) fn for_capture<R>(terms: &[String], work: impl FnOnce() -> R) -> R {
 /// shared list, then the terms this capture read from its window, each term
 /// once. Screen terms are lowest priority because they change with every
 /// window, and only a dictation hears them.
-fn transcription_entries() -> Vec<VocabularyEntry> {
-    let shared = entries();
-    if !DICTATING.with(Cell::get) {
-        return shared;
-    }
-    let focused = FOCUS
-        .get_or_init(Default::default)
-        .read()
-        .unwrap_or_else(|error| error.into_inner())
-        .clone();
-    #[cfg(target_os = "macos")]
-    let shared = match &focused {
-        Some(context) => {
+pub(crate) fn transcription_entries() -> Vec<VocabularyEntry> {
+    let mut list = entries();
+    if DICTATING.with(Cell::get) {
+        let focused = FOCUS
+            .get_or_init(Default::default)
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        #[cfg(target_os = "macos")]
+        if let Some(context) = &focused {
             let own = crate::dictation::config::dictation_profiles().vocabulary_for(context);
-            merged(&own, &shared)
+            list = merged(&own, &list);
         }
-        None => shared,
-    };
-    #[cfg(not(target_os = "macos"))]
-    let _ = focused;
-    let screen = SCREEN_TERMS.with(|terms| screen_entries(&terms.borrow()));
-    if screen.is_empty() {
-        return shared;
+        #[cfg(not(target_os = "macos"))]
+        let _ = focused;
+        let screen = SCREEN_TERMS.with(|terms| screen_entries(&terms.borrow()));
+        if !screen.is_empty() {
+            list = merged(&list, &screen);
+        }
     }
-    merged(&shared, &screen)
+    crate::transcription::gradium::learning::augment(&mut list);
+    list
 }
 
 /// Labs › Words on screen's terms as entries with no "sounds like"

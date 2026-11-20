@@ -79,6 +79,12 @@ pub(crate) fn learning_enabled() -> bool {
     active().is_some_and(|config| config.learn.unwrap_or(true))
 }
 
+/// Whether the configured file explicitly turned corrections and learning
+/// off. A missing file leaves the shared dictionary usable by the local model.
+pub(crate) fn learning_disabled() -> bool {
+    active().is_some_and(|config| !config.learn.unwrap_or(true))
+}
+
 /// Transcribes a complete 16 kHz mono clip. Returns an error, rather than an
 /// empty transcript, when Gradium cannot answer; the caller then falls back
 /// to the local model.

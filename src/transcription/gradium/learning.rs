@@ -248,6 +248,85 @@ fn push_keyword(words: &mut Vec<String>, seen: &mut HashSet<String>, term: &str)
     }
 }
 
+/// Adds the learned terms and mishearings to a vocabulary list, so Parakeet's
+/// own bias hears with everything Gradium learned. A learned correction's
+/// heard spelling becomes a "sounds like" of its right term.
+pub(crate) fn augment(entries: &mut Vec<VocabularyEntry>) {
+    if crate::transcription::gradium::learning_disabled() {
+        return;
+    }
+    let learned = Learned::load();
+    for term in &learned.terms {
+        add_term(entries, &term.term, &[]);
+    }
+    for correction in &learned.corrections {
+        add_term(
+            entries,
+            &correction.right,
+            std::slice::from_ref(&correction.heard),
+        );
+    }
+}
+
+fn add_term(entries: &mut Vec<VocabularyEntry>, term: &str, sounds_like: &[String]) {
+    let term = term.trim();
+    if term.is_empty() || term.chars().count() > MAX_TERM_CHARS {
+        return;
+    }
+    if let Some(entry) = entries
+        .iter_mut()
+        .find(|entry| entry.term.eq_ignore_ascii_case(term))
+    {
+        for sound in sounds_like {
+            let sound = sound.trim();
+            if sound.is_empty()
+                || sound.chars().count() > MAX_TERM_CHARS
+                || entry.sounds_like.len() >= 16
+                || entry
+                    .sounds_like
+                    .iter()
+                    .any(|known| known.eq_ignore_ascii_case(sound))
+            {
+                continue;
+            }
+            entry.sounds_like.push(sound.to_owned());
+        }
+        return;
+    }
+    if entries.len() >= 500 {
+        return;
+    }
+    entries.push(VocabularyEntry {
+        term: term.to_owned(),
+        sounds_like: sounds_like
+            .iter()
+            .map(|sound| sound.trim())
+            .filter(|sound| !sound.is_empty() && sound.chars().count() <= MAX_TERM_CHARS)
+            .map(str::to_owned)
+            .collect(),
+    });
+}
+
+/// Applies the shared dictionary to a local transcript, so a word learned
+/// through either engine fixes the other. Returns the text unchanged when
+/// nothing matches.
+pub(crate) fn correct_with(text: &str, configured: &[(String, String)]) -> String {
+    if text.trim().is_empty() || crate::transcription::gradium::learning_disabled() {
+        return text.to_owned();
+    }
+    let entries = crate::dictation::vocabulary::transcription_entries();
+    let mut learned = Learned::load();
+    let (text, corrected, learned) = learned.apply(text, &entries, configured);
+    if corrected > 0 || learned > 0 {
+        tracing::info!(
+            corrected,
+            learned,
+            "corrected a local transcript with the learned vocabulary"
+        );
+    }
+    text
+}
+
 /// The one-for-one word changes from `before` to `after`, when the edit
 /// touched at most three words. `None` for insertions, deletions, or wider
 /// edits, so a watcher keeps waiting instead of learning noise.

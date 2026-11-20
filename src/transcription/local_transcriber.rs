@@ -721,9 +721,20 @@ impl LocalTranscriber {
     }
 
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<String> {
-        if let Some(config) = crate::transcription::gradium::active() {
+        let gradium = crate::transcription::gradium::active();
+        let configured: Vec<(String, String)> = gradium
+            .as_ref()
+            .map(|config| {
+                config
+                    .corrections
+                    .iter()
+                    .map(|(heard, right)| (heard.clone(), right.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(config) = &gradium {
             match crate::transcription::gradium::transcribe(
-                &config,
+                config,
                 samples,
                 &self.selection.language,
             ) {
@@ -738,13 +749,17 @@ impl LocalTranscriber {
             this.session
                 .transcribe_chunked(samples, &this.options, this.max_audio_samples)
         };
-        match run(self) {
+        let text = match run(self) {
             Err(error) if self.gpu_failed(&error) => {
                 self.recover_on_cpu(&error)?;
                 run(self)
             }
             result => result,
-        }
+        }?;
+        Ok(crate::transcription::gradium::learning::correct_with(
+            &text,
+            &configured,
+        ))
     }
 }
 
