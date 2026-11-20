@@ -18,6 +18,11 @@ static OUTPUT_ICON: Icon = Icon {
     view: 24.0,
     body: include_str!("../../assets/icons/output.svg"),
 };
+static SNIPPETS_ICON: Icon = Icon {
+    name: "hex-snippets",
+    view: 24.0,
+    body: include_str!("../../assets/icons/snippets.svg"),
+};
 static HISTORY_ICON: Icon = Icon {
     name: "hex-history",
     view: 24.0,
@@ -60,6 +65,8 @@ pub(super) enum Pane {
     /// What Hex does to every dictation and in some apps, read-only: the
     /// person's agent edits it.
     Output,
+    /// Saved text a spoken shortcut expands to, in every dictation.
+    Snippets,
     /// The old per-app editor, in the sidebar while Labs › Modes editor is on
     /// (the `--snap` scenes render it directly).
     Modes,
@@ -90,6 +97,7 @@ impl Pane {
     pub(super) const ALL: &[Pane] = &[
         Pane::General,
         Pane::Output,
+        Pane::Snippets,
         Pane::Modes,
         Pane::Meetings,
         Pane::History,
@@ -126,6 +134,7 @@ impl Pane {
         match self {
             Pane::General => tr("General"),
             Pane::Output => tr("Output"),
+            Pane::Snippets => tr("Snippets"),
             Pane::Modes => tr("Modes"),
             Pane::History => tr("History"),
             #[cfg(hex_capture)]
@@ -144,6 +153,7 @@ impl Pane {
         match self {
             Pane::General => "nav-general",
             Pane::Output => "nav-output",
+            Pane::Snippets => "nav-snippets",
             Pane::Modes => "nav-modes",
             Pane::History => "nav-history",
             #[cfg(hex_capture)]
@@ -162,6 +172,7 @@ impl Pane {
         match self {
             Pane::General => &SETTINGS_ICON,
             Pane::Output => &OUTPUT_ICON,
+            Pane::Snippets => &SNIPPETS_ICON,
             Pane::Modes => &MODES_ICON,
             Pane::History => &HISTORY_ICON,
             #[cfg(hex_capture)]

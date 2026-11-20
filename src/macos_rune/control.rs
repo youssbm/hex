@@ -479,6 +479,7 @@ impl Pump {
             None | Some(Pane::Settings) => Destination::Settings,
             Some(Pane::Models) => Destination::Models,
             Some(Pane::Modes) => Destination::Modes,
+            Some(Pane::Snippets) => Destination::Snippets,
             Some(Pane::History) => Destination::History,
             // While Meetings is off the pane shows its opt-in.
             Some(Pane::Meetings) => Destination::Meetings(None),

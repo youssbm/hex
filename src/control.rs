@@ -71,6 +71,7 @@ pub enum Pane {
     Models,
     #[value(alias = "replacements")]
     Modes,
+    Snippets,
     History,
     Meetings,
 }

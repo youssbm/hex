@@ -11,6 +11,11 @@ use crate::dictation::vocabulary::{VocabularyEntry, serialize_saved};
 pub struct DictationProcessingSettings {
     pub default_mode: DictationMode,
     pub modes: Vec<DictationMode>,
+    /// Spoken shortcuts expanded in every dictation, whatever its mode.
+    /// A snippet is the text you type all the time: an email, a link, an
+    /// address, a signature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snippets: Vec<TextReplacement>,
 }
 
 impl Default for DictationProcessingSettings {
@@ -21,6 +26,7 @@ impl Default for DictationProcessingSettings {
                 ..Default::default()
             },
             modes: Vec::new(),
+            snippets: Vec::new(),
         }
     }
 }

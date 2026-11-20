@@ -115,32 +115,49 @@ impl Learned {
             }
         }
 
-        // Configured pairs win over learned ones: the file is the last word.
-        let mut corrections: HashMap<String, String> = HashMap::new();
-        for (heard, right) in configured {
-            let heard = heard.trim().to_lowercase();
-            if !heard.is_empty() && !right.trim().is_empty() {
-                corrections.insert(heard, right.trim().to_owned());
-            }
-        }
-        for correction in &self.corrections {
-            corrections
-                .entry(correction.heard.to_lowercase())
-                .or_insert_with(|| correction.right.clone());
-        }
+        let phrases = build_phrases(configured, &self.corrections);
+        let spans = word_spans(raw);
+        let words: Vec<String> = spans
+            .iter()
+            .map(|(start, end)| raw[*start..*end].to_lowercase())
+            .collect();
 
         let mut out = String::with_capacity(raw.len());
-        let mut last = 0;
+        let mut cursor = 0;
+        let mut index = 0;
         let mut changed = 0;
         let mut learned = Vec::new();
 
-        for (start, end) in word_spans(raw) {
-            out.push_str(&raw[last..start]);
+        while index < spans.len() {
+            let mut matched = None;
+            for phrase in &phrases {
+                let end = index + phrase.words.len();
+                if end > spans.len() {
+                    continue;
+                }
+                if phrase
+                    .words
+                    .iter()
+                    .zip(&words[index..end])
+                    .all(|(expected, actual)| expected == actual)
+                {
+                    matched = Some((phrase, end));
+                    break;
+                }
+            }
+            if let Some((phrase, end)) = matched {
+                out.push_str(&raw[cursor..spans[index].0]);
+                out.push_str(&phrase.right);
+                cursor = spans[end - 1].1;
+                index = end;
+                changed += 1;
+                continue;
+            }
+
+            let (start, end) = spans[index];
+            out.push_str(&raw[cursor..start]);
             let word = &raw[start..end];
-            let lower = word.to_lowercase();
-            let replacement = if let Some(right) = corrections.get(&lower) {
-                Some(right.clone())
-            } else if let Some(term) = exact.get(&lower) {
+            let replacement = if let Some(term) = exact.get(&words[index]) {
                 (term.as_str() != word).then(|| term.clone())
             } else if let Some(term) = fuzzy(word, entries) {
                 learned.push((word.to_owned(), term.clone()));
@@ -155,9 +172,10 @@ impl Learned {
                 }
                 None => out.push_str(word),
             }
-            last = end;
+            cursor = end;
+            index += 1;
         }
-        out.push_str(&raw[last..]);
+        out.push_str(&raw[cursor..]);
 
         for (heard, right) in &learned {
             self.learn(heard, right);
@@ -204,6 +222,44 @@ impl Learned {
                 self.terms.remove(0);
             }
         }
+    }
+}
+
+struct Phrase {
+    /// The heard phrase's words, lowercased.
+    words: Vec<String>,
+    right: String,
+}
+
+/// Configured pairs first, then learned ones, longest phrase first, so a
+/// whole spoken email wins over a shorter rule inside it.
+fn build_phrases(configured: &[(String, String)], learned: &[Correction]) -> Vec<Phrase> {
+    let mut seen = HashSet::new();
+    let mut list = Vec::new();
+    for (heard, right) in configured {
+        add_phrase(&mut list, &mut seen, heard, right);
+    }
+    for correction in learned {
+        add_phrase(&mut list, &mut seen, &correction.heard, &correction.right);
+    }
+    list.sort_by(|left, right| right.words.len().cmp(&left.words.len()));
+    list
+}
+
+fn add_phrase(list: &mut Vec<Phrase>, seen: &mut HashSet<String>, heard: &str, right: &str) {
+    let right = right.trim();
+    let words: Vec<String> = words(heard)
+        .iter()
+        .map(|word| word.to_lowercase())
+        .collect();
+    if words.is_empty() || right.is_empty() {
+        return;
+    }
+    if seen.insert(words.join(" ")) {
+        list.push(Phrase {
+            words,
+            right: right.to_owned(),
+        });
     }
 }
 
@@ -327,23 +383,60 @@ pub(crate) fn correct_with(text: &str, configured: &[(String, String)]) -> Strin
     text
 }
 
-/// The one-for-one word changes from `before` to `after`, when the edit
-/// touched at most three words. `None` for insertions, deletions, or wider
-/// edits, so a watcher keeps waiting instead of learning noise.
+/// A word and the text before it, so an edit that changes a separator (the
+/// space before `gmail` becoming `@`) is not mistaken for an unchanged
+/// suffix.
+#[derive(PartialEq)]
+struct Token {
+    gap: String,
+    word: String,
+    start: usize,
+    end: usize,
+}
+
+fn tokens(text: &str) -> Vec<Token> {
+    let spans = word_spans(text);
+    let mut tokens = Vec::with_capacity(spans.len());
+    let mut previous_end = 0;
+    for (index, (start, end)) in spans.iter().enumerate() {
+        tokens.push(Token {
+            gap: if index == 0 {
+                String::new()
+            } else {
+                text[previous_end..*start].to_owned()
+            },
+            word: text[*start..*end].to_owned(),
+            start: *start,
+            end: *end,
+        });
+        previous_end = *end;
+    }
+    tokens
+}
+
+/// The one contiguous edit from `before` to `after`, up to eight words on
+/// either side. A replacement may change the word count, so a spoken email
+/// becomes the address typed over it. `None` for insertions, deletions, or
+/// wider rewrites, so a watcher keeps waiting instead of learning noise.
 pub(crate) fn corrections_between(before: &str, after: &str) -> Option<Vec<(String, String)>> {
-    let left = words(before);
-    let right = words(after);
+    let left = tokens(before);
+    let right = tokens(after);
     if left == right {
         return None;
     }
     let mut prefix = 0;
-    while prefix < left.len() && prefix < right.len() && left[prefix] == right[prefix] {
+    while prefix < left.len()
+        && prefix < right.len()
+        && left[prefix].gap == right[prefix].gap
+        && left[prefix].word == right[prefix].word
+    {
         prefix += 1;
     }
     let mut suffix = 0;
     while suffix < left.len().saturating_sub(prefix)
         && suffix < right.len().saturating_sub(prefix)
-        && left[left.len() - 1 - suffix] == right[right.len() - 1 - suffix]
+        && left[left.len() - 1 - suffix].gap == right[right.len() - 1 - suffix].gap
+        && left[left.len() - 1 - suffix].word == right[right.len() - 1 - suffix].word
     {
         suffix += 1;
     }
@@ -352,16 +445,15 @@ pub(crate) fn corrections_between(before: &str, after: &str) -> Option<Vec<(Stri
     if left_middle.is_empty() || right_middle.is_empty() {
         return None;
     }
-    if left_middle.len() != right_middle.len() || left_middle.len() > 3 {
+    if left_middle.len() > 8 || right_middle.len() > 8 {
         return None;
     }
-    let pairs: Vec<(String, String)> = left_middle
-        .iter()
-        .zip(right_middle)
-        .filter(|(before, after)| before != after)
-        .map(|(before, after)| (before.clone(), after.clone()))
-        .collect();
-    (!pairs.is_empty()).then_some(pairs)
+    let heard = &before[left_middle[0].start..left_middle[left_middle.len() - 1].end];
+    let replacement = &after[right_middle[0].start..right_middle[right_middle.len() - 1].end];
+    if heard == replacement {
+        return None;
+    }
+    Some(vec![(heard.to_owned(), replacement.to_owned())])
 }
 
 /// Whether two texts share a word of four characters or more, so a field is
@@ -369,14 +461,22 @@ pub(crate) fn corrections_between(before: &str, after: &str) -> Option<Vec<(Stri
 pub(crate) fn shares_word(left: &str, right: &str) -> bool {
     words(left)
         .iter()
-        .any(|word| word.chars().count() >= 4 && contains_word(right, word))
+        .any(|word| word.chars().count() >= 4 && contains_phrase(right, word))
 }
 
-/// Whether `text` holds `word`, ignoring case and surrounding punctuation.
-pub(crate) fn contains_word(text: &str, word: &str) -> bool {
-    words(text)
+/// Whether `text` holds `phrase` as consecutive words, ignoring case and
+/// surrounding punctuation.
+pub(crate) fn contains_phrase(text: &str, phrase: &str) -> bool {
+    let hay: Vec<String> = words(text).iter().map(|word| word.to_lowercase()).collect();
+    let needle: Vec<String> = words(phrase)
         .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(word))
+        .map(|word| word.to_lowercase())
+        .collect();
+    if needle.is_empty() || needle.len() > hay.len() {
+        return false;
+    }
+    hay.windows(needle.len())
+        .any(|window| window == needle.as_slice())
 }
 
 fn words(text: &str) -> Vec<String> {
@@ -611,16 +711,79 @@ mod tests {
     }
 
     #[test]
-    fn up_to_three_replaced_words_are_learned() {
+    fn a_contiguous_replaced_phrase_is_one_correction() {
         let pairs = corrections_between("a b c d", "a x y d").unwrap();
+        assert_eq!(pairs, vec![("b c".to_owned(), "x y".to_owned())]);
+        assert!(
+            corrections_between("a b c d e f g h i j k", "a v w x y z aa bb cc dd k").is_none()
+        );
+    }
+
+    #[test]
+    fn a_spoken_email_is_learned_as_one_phrase() {
+        let pairs =
+            corrections_between("Yusuf BM 2008 at gmail.com", "youssefbm2008@gmail.com").unwrap();
         assert_eq!(
             pairs,
-            vec![
-                ("b".to_owned(), "x".to_owned()),
-                ("c".to_owned(), "y".to_owned())
-            ]
+            vec![(
+                "Yusuf BM 2008 at gmail".to_owned(),
+                "youssefbm2008@gmail".to_owned()
+            )]
         );
-        assert!(corrections_between("a b c d e", "a v w x y").is_none());
+    }
+
+    #[test]
+    fn a_full_configured_email_phrase_applies_with_its_punctuation() {
+        let mut learned = Learned::default();
+        let (text, changed, _) = learned.apply(
+            "my Yusuf BM 2008 at gmail.com, thanks",
+            &[],
+            &[(
+                "Yusuf BM 2008 at gmail.com".to_owned(),
+                "youssefbm2008@gmail.com".to_owned(),
+            )],
+        );
+        assert_eq!(text, "my youssefbm2008@gmail.com, thanks");
+        assert_eq!(changed, 1);
+    }
+
+    #[test]
+    fn a_learned_partial_email_keeps_its_shared_suffix() {
+        let mut learned = Learned::default();
+        learned.corrections.push(Correction {
+            heard: "Yusuf BM 2008 at gmail".into(),
+            right: "youssefbm2008@gmail".into(),
+            count: 1,
+        });
+        let (text, changed, _) = learned.apply("Yusuf BM 2008 at gmail.com", &[], &[]);
+        assert_eq!(text, "youssefbm2008@gmail.com");
+        assert_eq!(changed, 1);
+    }
+
+    #[test]
+    fn a_longer_phrase_wins_over_a_shorter_one() {
+        let mut learned = Learned::default();
+        let (text, _, _) = learned.apply(
+            "my Yusuf BM 2008 at gmail.com",
+            &[],
+            &[
+                ("gmail.com".to_owned(), "wrong".to_owned()),
+                (
+                    "Yusuf BM 2008 at gmail.com".to_owned(),
+                    "youssefbm2008@gmail.com".to_owned(),
+                ),
+            ],
+        );
+        assert_eq!(text, "my youssefbm2008@gmail.com");
+    }
+
+    #[test]
+    fn a_phrase_is_found_in_a_longer_macro() {
+        assert!(contains_phrase(
+            "Yusuf BM 2008 at gmail.com",
+            "Yusuf BM 2008 at gmail"
+        ));
+        assert!(!contains_phrase("Yusuf BM 2008 at gmail.com", "BM Yusuf"));
     }
 
     #[test]

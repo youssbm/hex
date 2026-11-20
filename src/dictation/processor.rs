@@ -320,7 +320,12 @@ impl Profiles {
     ) -> Self {
         let mut global = Profile::from_mode(&settings.default_mode);
         global.name = "Global".into();
-        let replacements = std::mem::take(&mut global.replacements);
+        // Snippets first, so they win a same-length overlap with a mode's
+        // correction, then Global's corrections. Both apply to every mode.
+        let mut rules = settings.snippets.clone();
+        rules.extend(settings.default_mode.replacements.iter().cloned());
+        let replacements = ReplacementSet::new(&rules);
+        global.replacements = ReplacementSet::default();
         let mut profiles = Self::new(global).global_replacements(replacements);
         for mode in &settings.modes {
             let profile = Profile::from_mode(mode);

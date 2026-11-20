@@ -89,7 +89,7 @@ fn run(id: u64, window: isize, pasted: String) {
         };
         let mut learned = 0;
         for (heard, right) in pairs {
-            if !crate::transcription::gradium::learning::contains_word(&pasted, &heard) {
+            if !crate::transcription::gradium::learning::contains_phrase(&pasted, &heard) {
                 continue;
             }
             if crate::transcription::gradium::learning::remember(&heard, &right) {

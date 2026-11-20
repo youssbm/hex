@@ -70,6 +70,7 @@ mod shortcut_mode;
 mod shortcut_rule;
 mod sidebar;
 mod sidebar_update;
+mod snippets;
 mod sound_sets;
 mod spark;
 mod speech_model;
@@ -418,6 +419,7 @@ pub(crate) enum Destination {
     /// The Meetings pane, with a meeting selected when given.
     Meetings(Option<String>),
     Modes,
+    Snippets,
     History,
 }
 
@@ -430,6 +432,7 @@ pub(crate) fn destination(pane: Option<crate::control::Pane>) -> Destination {
         None | Some(Named::Settings) => Destination::Settings,
         Some(Named::Models) => Destination::Models,
         Some(Named::Modes) => Destination::Modes,
+        Some(Named::Snippets) => Destination::Snippets,
         Some(Named::History) => Destination::History,
         Some(Named::Meetings) => Destination::Meetings(None),
     }
@@ -447,6 +450,7 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
                 Pane::Output
             }
         }
+        Destination::Snippets => Pane::Snippets,
         Destination::History => Pane::History,
     };
     ui.close_dialogs();
@@ -698,6 +702,7 @@ pub(crate) struct Ui {
     captures: captures::CapturesPane,
     modes: modes::ModesPane,
     output: output::OutputPane,
+    snippets: snippets::SnippetsPane,
     picker: picker::Picker,
     /// Speech models already on this computer, and choosing one.
     found: found::FoundState,
@@ -791,6 +796,7 @@ impl Ui {
     fn with(settings: AppSettings, service: Service) -> Self {
         let modes = modes::ModesPane::new(&settings);
         let vocabulary = vocabulary::VocabularyEditor::new(&settings.vocabulary);
+        let snippets = snippets::SnippetsPane::new(&settings);
         Self {
             settings,
             #[cfg(test)]
@@ -828,6 +834,7 @@ impl Ui {
             captures: captures::CapturesPane::default(),
             modes,
             output: output::OutputPane::default(),
+            snippets,
             picker: picker::Picker::default(),
             found: found::FoundState::default(),
             explainer: explainer::Explainer::default(),
@@ -918,6 +925,8 @@ impl Ui {
         );
         self.settings = candidate;
         self.modes.committed(&self.settings);
+        self.snippets
+            .rebase(&self.settings.dictation_processing.snippets);
         self.draft_since = None;
         self.settings_changed();
         true
@@ -936,6 +945,7 @@ impl Ui {
         let mut candidate = self.settings.clone();
         self.modes.project(&mut candidate);
         candidate.vocabulary = self.vocabulary.project();
+        candidate.dictation_processing.snippets = self.snippets.project();
         self.lab_store.project_phrase(&mut candidate);
         self.lab_store.project_stop_phrase(&mut candidate);
         self.lab_store.project_origins(&mut candidate);
@@ -1132,6 +1142,7 @@ impl Ui {
             if !drafts.vocabulary && service.vocabulary != self.settings.vocabulary {
                 self.vocabulary.reload(&service.vocabulary);
             }
+            self.snippets.rebase(&service.dictation_processing.snippets);
             // Only a saved phrase that actually changed may reset the field,
             // so any other external save leaves its focus and caret alone. A
             // lab toggled elsewhere resyncs it, dropping a stale draft.
@@ -1527,6 +1538,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         _ if ui.labs_open => (vec![labs::tabs(ui, p)], labs::page(ui, p, cx, &mut layer)),
         Pane::General => (Vec::new(), general::pane(ui, p, &mut layer)),
         Pane::Output => (Vec::new(), output::pane(ui, p, cx.is_reduced_motion())),
+        Pane::Snippets => (Vec::new(), snippets::pane(ui, p)),
         Pane::Modes => modes::pane(ui, p, &mut layer),
         Pane::History => history::pane(ui, p, cx, &mut layer),
         #[cfg(hex_capture)]
