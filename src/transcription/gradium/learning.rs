@@ -76,6 +76,9 @@ impl Learned {
         let Ok(text) = serde_json::to_string_pretty(self) else {
             return;
         };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let temporary = path.with_extension("json.tmp");
         if let Err(error) =
             std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, &path))
