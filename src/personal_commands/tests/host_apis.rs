@@ -90,12 +90,10 @@ fn fetch_waits_for_approval_then_reaches_a_local_server() {
 
     // Any edit asks again.
     harness.write(&format!("{config}// edited\n"));
-    assert!(
-        harness
-            .transform(&["ollama"], "hi")
-            .unwrap_err()
-            .contains("has not allowed")
-    );
+    assert!(harness
+        .transform(&["ollama"], "hi")
+        .unwrap_err()
+        .contains("has not allowed"));
     harness.allow();
     assert!(harness.transform(&["ollama"], "again").is_ok());
     assert_eq!(
@@ -175,12 +173,10 @@ export default {
     let permissions = harness.worker.status.permissions.clone().unwrap();
     assert!(permissions.exec && !permissions.fetch);
     assert!(permissions.partial, "promisify hides the programs");
-    assert!(
-        harness
-            .transform(&["upper"], "hi")
-            .unwrap_err()
-            .contains("has not allowed this config to run programs")
-    );
+    assert!(harness
+        .transform(&["upper"], "hi")
+        .unwrap_err()
+        .contains("has not allowed this config to run programs"));
     harness.allow();
     assert_eq!(harness.transform(&["upper"], "hello").unwrap(), "HELLO");
     assert_eq!(
@@ -303,6 +299,7 @@ fn a_throwing_or_slow_transformation_pastes_the_text_unchanged() {
             nothing: false,
             observation: None,
             transformations: vec![id.into()],
+            strip_final_dot: false,
         };
         processed.apply_transformations(
             &client,

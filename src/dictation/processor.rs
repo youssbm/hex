@@ -83,6 +83,35 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// Whether the prompt asks the result not to end with a dot. The
+    /// transcription services read the prompt as context, so Hex applies
+    /// this part itself after the last transformation.
+    fn wants_no_final_dot(&self) -> bool {
+        let prompt = self.prompt.to_lowercase();
+        [
+            "no end with a dot",
+            "not end with a dot",
+            "dont end with a dot",
+            "don't end with a dot",
+            "no dot at the end",
+            "no final dot",
+            "no trailing dot",
+            "without a final dot",
+            "without a trailing dot",
+            "no end with a period",
+            "not end with a period",
+            "dont end with a period",
+            "don't end with a period",
+            "no period at the end",
+            "no final period",
+            "no trailing period",
+            "without a final period",
+            "without a trailing period",
+        ]
+        .iter()
+        .any(|phrase| prompt.contains(phrase))
+    }
+
     pub fn new(name: impl Into<String>, prompt: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -544,6 +573,7 @@ impl Profiles {
                 nothing: false,
                 observation,
                 transformations: profile.transformations.clone(),
+                strip_final_dot: profile.wants_no_final_dot(),
             };
         }
         let prompt = prompt(
@@ -585,6 +615,7 @@ impl Profiles {
             nothing: false,
             observation: Some(observation),
             transformations: profile.transformations.clone(),
+            strip_final_dot: profile.wants_no_final_dot(),
         }
     }
 }
@@ -612,6 +643,7 @@ fn voice_prompt_processed(
             nothing: true,
             observation: None,
             transformations: Vec::new(),
+            strip_final_dot: false,
         };
     }
     let request = voice_prompt_request(
@@ -672,6 +704,7 @@ fn voice_prompt_answer(
         nothing: false,
         observation,
         transformations: transformations.to_vec(),
+        strip_final_dot: false,
     }
 }
 
@@ -1218,6 +1251,9 @@ pub struct Processed {
     pub nothing: bool,
     pub observation: Option<ProcessingObservation>,
     pub transformations: Vec<String>,
+    /// The mode's prompt asked for no final dot, so the last stage removes
+    /// one after the transformations.
+    pub(crate) strip_final_dot: bool,
 }
 
 pub type ProcessingObservation = crate::desktop::events::DictationProcessing;
@@ -1232,6 +1268,7 @@ impl Processed {
             nothing: false,
             observation: None,
             transformations: Vec::new(),
+            strip_final_dot: false,
         }
     }
 
@@ -1244,33 +1281,45 @@ impl Processed {
         cancelled: &AtomicBool,
         source: Source,
     ) {
-        if self.transformations.is_empty() || cancelled.load(Ordering::Acquire) {
-            return;
+        if !self.transformations.is_empty() && !cancelled.load(Ordering::Acquire) {
+            let started = Instant::now();
+            let transformed = client.transform(
+                &self.transformations,
+                &self.text,
+                context,
+                cancelled,
+                source,
+            );
+            let observation = self
+                .observation
+                .get_or_insert_with(|| ProcessingObservation {
+                    profile: CUSTOM_TRANSFORMATIONS.into(),
+                    latency_ms: 0,
+                    model: None,
+                    fallback: None,
+                });
+            observation.latency_ms = observation
+                .latency_ms
+                .saturating_add(started.elapsed().as_millis() as u64);
+            match transformed {
+                Ok(text) => self.text = text,
+                Err(error) => observation.fallback = Some(error),
+            }
         }
-        let started = Instant::now();
-        let transformed = client.transform(
-            &self.transformations,
-            &self.text,
-            context,
-            cancelled,
-            source,
-        );
-        let observation = self
-            .observation
-            .get_or_insert_with(|| ProcessingObservation {
-                profile: CUSTOM_TRANSFORMATIONS.into(),
-                latency_ms: 0,
-                model: None,
-                fallback: None,
-            });
-        observation.latency_ms = observation
-            .latency_ms
-            .saturating_add(started.elapsed().as_millis() as u64);
-        match transformed {
-            Ok(text) => self.text = text,
-            Err(error) => observation.fallback = Some(error),
+        if self.strip_final_dot && !cancelled.load(Ordering::Acquire) {
+            self.text = strip_final_dot(&self.text);
         }
     }
+}
+
+/// Removes one trailing period, and the spaces before it, when a prompt
+/// asked not to end with a dot. Leaves `?` and `!` alone.
+fn strip_final_dot(text: &str) -> String {
+    let trimmed = text.trim_end();
+    let Some(stripped) = trimmed.strip_suffix('.') else {
+        return text.to_owned();
+    };
+    stripped.trim_end().to_owned()
 }
 
 /// The transcript ahead of mode corrections. Spoken formatting, spoken
@@ -2931,5 +2980,21 @@ mod tests {
             generate("Reply with exactly: test", None, Duration::from_secs(30)).unwrap(),
             "test"
         );
+    }
+
+    #[test]
+    fn a_prompt_asking_for_no_final_dot_strips_one() {
+        let asks = Profile::new(
+            "Global",
+            "Do no end with a dot at the end of transcription.",
+        );
+        assert!(asks.wants_no_final_dot());
+        assert_eq!(strip_final_dot("Hello."), "Hello");
+        assert_eq!(strip_final_dot("Hello.  "), "Hello");
+        assert_eq!(strip_final_dot("Hello?"), "Hello?");
+        assert_eq!(strip_final_dot("."), "");
+
+        let plain = Profile::new("Global", "Rewrite the transcript clearly.");
+        assert!(!plain.wants_no_final_dot());
     }
 }
