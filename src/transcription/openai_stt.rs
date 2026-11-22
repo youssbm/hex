@@ -16,6 +16,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use serde::Deserialize;
 
+use crate::dictation::vocabulary::VocabularyEntry;
+
 const API_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const CODEX_URL: &str = "https://chatgpt.com/backend-api/transcribe";
 const MAX_AUDIO_BYTES: usize = 25 * 1024 * 1024;
@@ -23,9 +25,11 @@ const MAX_AUDIO_BYTES: usize = 25 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const DEADLINE: Duration = Duration::from_secs(120);
 const SAMPLE_RATE: u32 = 16_000;
-/// Characters of the vocabulary sent as the transcription prompt. The
-/// service's prompt slot is a few hundred tokens; this stays well inside it.
-pub(crate) const PROMPT_CHARS: usize = 800;
+/// Characters of context sent as the transcription prompt. The service's
+/// prompt slot is about 224 tokens, so this stays inside it.
+pub(crate) const PROMPT_CHARS: usize = 900;
+/// The person's instruction's share, leaving room for vocabulary terms.
+const INSTRUCTION_CHARS: usize = 800;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
@@ -267,15 +271,24 @@ pub(crate) fn transcribe(
         for correction in &learned.corrections {
             let right = correction.right.trim();
             if !right.is_empty() && !crate::dictation::vocabulary::contains(&entries, right) {
-                entries.push(crate::dictation::vocabulary::VocabularyEntry {
+                entries.push(VocabularyEntry {
                     term: right.to_owned(),
                     sounds_like: Vec::new(),
                 });
             }
         }
     }
-    let vocabulary = crate::dictation::vocabulary::prompt_for(&entries, PROMPT_CHARS)
-        .map(|terms| format!("Names and terms: {terms}."));
+    let instruction = crate::app_settings::AppSettings::read()
+        .ok()
+        .map(|settings| {
+            settings
+                .dictation_processing
+                .default_mode
+                .post_processing
+                .prompt
+        })
+        .unwrap_or_default();
+    let context = context_prompt(&instruction, &entries);
     let wav = wav(samples);
     if wav.len() > MAX_AUDIO_BYTES {
         return Err(eyre!(
@@ -289,7 +302,7 @@ pub(crate) fn transcribe(
         &boundary,
         model,
         language.as_deref(),
-        vocabulary.as_deref(),
+        context.as_deref(),
         &config.backend,
         &wav,
     );
@@ -338,13 +351,41 @@ pub(crate) fn transcribe(
         ms = started.elapsed().as_millis(),
         backend = %config.backend,
         model = %model,
-        prompt_chars = vocabulary.as_ref().map_or(0, |prompt| prompt.chars().count()),
+        prompt_chars = context.as_ref().map_or(0, |prompt| prompt.chars().count()),
         corrected,
         learned = learned_pairs,
         chars = transcript.chars().count(),
         "transcribed a clip with OpenAI STT"
     );
     Ok(transcript)
+}
+
+/// The transcription prompt: the person's writing instruction, then the
+/// vocabulary and learned spellings that fit. The service reads it as
+/// context, so the instruction comes first and the terms come last.
+fn context_prompt(instruction: &str, entries: &[VocabularyEntry]) -> Option<String> {
+    let instruction = instruction.trim();
+    let mut prompt = String::new();
+    if !instruction.is_empty() {
+        prompt.extend(instruction.chars().take(INSTRUCTION_CHARS));
+        let trimmed = prompt.trim_end().len();
+        prompt.truncate(trimmed);
+    }
+    let remaining = PROMPT_CHARS.saturating_sub(prompt.chars().count());
+    let prefix = "Names and terms: ";
+    let suffix = ".";
+    let budget = remaining.saturating_sub(prefix.chars().count() + suffix.chars().count());
+    if budget > 0
+        && let Some(terms) = crate::dictation::vocabulary::prompt_for(entries, budget)
+    {
+        if !prompt.is_empty() {
+            prompt.push_str("\n\n");
+        }
+        prompt.push_str(prefix);
+        prompt.push_str(&terms);
+        prompt.push_str(suffix);
+    }
+    (!prompt.trim().is_empty()).then_some(prompt)
 }
 
 fn boundary() -> String {
@@ -512,6 +553,19 @@ mod tests {
 
         let api = multipart("b", "whisper-1", None, None, "api_key", &wav);
         assert!(String::from_utf8_lossy(&api).contains("name=\"response_format\"\r\n\r\njson"));
+    }
+
+    #[test]
+    fn the_context_prompt_carries_the_instruction_then_the_terms() {
+        let entries = vec![VocabularyEntry {
+            term: "Gradium".into(),
+            sounds_like: vec![],
+        }];
+        let prompt = context_prompt("Write in short sentences.", &entries).unwrap();
+        assert!(prompt.starts_with("Write in short sentences."));
+        assert!(prompt.ends_with("Names and terms: Gradium."));
+        assert!(prompt.chars().count() <= PROMPT_CHARS);
+        assert_eq!(context_prompt("  ", &[]), None);
     }
 
     #[test]

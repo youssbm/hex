@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use rune::{El, TextEdit, Tx, col, row, text};
-use rune_kit::{Button, ButtonVariant, Switch, TextArea};
+use rune_kit::{Button, ButtonVariant, TextArea};
 
 #[cfg(target_os = "linux")]
 use super::ShortcutTarget;
@@ -49,9 +49,6 @@ pub(super) struct OutputPane {
     prompt: TextEdit,
     /// The saved prompt the draft above started from.
     prompt_base: String,
-    /// The prompt as of the last explicit Save or switch press, so Save can
-    /// tell an edit from a draft the auto-save already stored.
-    prompt_saved: String,
     /// Edit with agent copied its prompt, until the pane is left.
     pub(super) prompt_copied: bool,
     /// The app rule opened to show its steps.
@@ -85,8 +82,7 @@ impl OutputPane {
             .clone();
         Self {
             prompt: TextEdit::new(prompt.clone()),
-            prompt_base: prompt.clone(),
-            prompt_saved: prompt,
+            prompt_base: prompt,
             ..Self::default()
         }
     }
@@ -301,8 +297,8 @@ fn agent_card(ui: &Ui, p: Paint, reduced: bool) -> El {
     )
 }
 
-/// The prompt that tells the OpenCode rewrite how to write, and the spoken
-/// snippets, both edited here and saved to `settings.json`.
+/// The prompt sent to OpenAI STT as context, and the spoken snippets, both
+/// edited here and saved to `settings.json`.
 fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
     let label = if ui.output.saved_at.is_some() {
         tr("Saved")
@@ -315,31 +311,9 @@ fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
         label,
         ButtonKind::Primary,
         |ui: &mut Ui, _: &mut Tx| {
-            let apply = !ui
-                .settings
-                .dictation_processing
-                .default_mode
-                .post_processing
-                .enabled
-                && !ui.output.prompt.text.trim().is_empty()
-                && ui.output.prompt.text != ui.output.prompt_saved;
-            if apply {
-                if ui.update(|settings| {
-                    settings
-                        .dictation_processing
-                        .default_mode
-                        .post_processing
-                        .enabled = true;
-                }) {
-                    ui.output.prompt_saved = ui.output.prompt.text.clone();
-                    ui.output.saved_at = Some(Instant::now());
-                }
-            } else {
-                ui.flush_drafts();
-                if ui.error.is_none() {
-                    ui.output.prompt_saved = ui.output.prompt.text.clone();
-                    ui.output.saved_at = Some(Instant::now());
-                }
+            ui.flush_drafts();
+            if ui.error.is_none() {
+                ui.output.saved_at = Some(Instant::now());
             }
         },
     );
@@ -383,47 +357,9 @@ fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
     )
 }
 
-/// The OpenCode rewrite prompt's field, the switch that applies it, and the
-/// job it does.
+/// The prompt sent as OpenAI STT context, with the vocabulary and learned
+/// words it runs alongside.
 fn prompt_row(ui: &Ui, p: Paint) -> El {
-    let enabled = ui
-        .settings
-        .dictation_processing
-        .default_mode
-        .post_processing
-        .enabled;
-    let toggle = Switch::new(enabled)
-        .on_toggle(|ui: &mut Ui| {
-            let enabled = ui
-                .settings
-                .dictation_processing
-                .default_mode
-                .post_processing
-                .enabled;
-            ui.output.prompt_saved = ui.output.prompt.text.clone();
-            ui.update(|settings| {
-                settings
-                    .dictation_processing
-                    .default_mode
-                    .post_processing
-                    .enabled = !enabled;
-            });
-        })
-        .build(p.k)
-        .key("prompt-enabled")
-        .label(tr("Use this prompt"));
-    let toggle_copy = col()
-        .key("copy")
-        .gap(2.0)
-        .child(text(tr("Use this prompt")).font(p.k.ty.ui).color(p.text()))
-        .child(
-            text(tr(
-                "Rewrites every dictation with OpenCode before it pastes",
-            ))
-            .font(DESCRIPTION)
-            .color(p.muted())
-            .wrap(),
-        );
     col()
         .key("prompt")
         .px(METRICS.row_px)
@@ -437,7 +373,7 @@ fn prompt_row(ui: &Ui, p: Paint) -> El {
         )
         .child(
             text(tr(
-                "Used by the OpenCode rewrite: spelling, punctuation, tone, and format.",
+                "Sent to OpenAI STT as context, with your vocabulary and learned words.",
             ))
             .key("description")
             .font(DESCRIPTION)
@@ -446,21 +382,12 @@ fn prompt_row(ui: &Ui, p: Paint) -> El {
         )
         .child(
             TextArea::new(&ui.output.prompt)
-                .placeholder(tr("Describe how OpenCode should rewrite your dictation."))
+                .placeholder(tr("Describe how Hex should write your dictation."))
                 .rows(4)
                 .width(None)
                 .on_edit(|ui: &mut Ui| &mut ui.output.prompt)
                 .build(p.k)
                 .key("prompt-input"),
-        )
-        .child(
-            row()
-                .key("prompt-toggle")
-                .pt(6.0)
-                .gap(10.0)
-                .center_y()
-                .child(toggle)
-                .child(toggle_copy),
         )
 }
 
