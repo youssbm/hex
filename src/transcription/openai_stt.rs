@@ -254,7 +254,26 @@ pub(crate) fn transcribe(
         .filter(|model| !model.is_empty())
         .unwrap_or_else(|| default_model(&config.backend));
     let language = language(config, selection_language);
-    let entries = crate::dictation::vocabulary::entries();
+    let learn = !crate::transcription::gradium::learning_disabled();
+    let mut learned = if learn {
+        crate::transcription::gradium::learning::Learned::load()
+    } else {
+        crate::transcription::gradium::learning::Learned::default()
+    };
+    let mut entries = crate::dictation::vocabulary::entries();
+    if learn {
+        // A correction learned since the Vocabulary pane last imported is
+        // still sent, so a fresh mishearing reaches the model right away.
+        for correction in &learned.corrections {
+            let right = correction.right.trim();
+            if !right.is_empty() && !crate::dictation::vocabulary::contains(&entries, right) {
+                entries.push(crate::dictation::vocabulary::VocabularyEntry {
+                    term: right.to_owned(),
+                    sounds_like: Vec::new(),
+                });
+            }
+        }
+    }
     let vocabulary = crate::dictation::vocabulary::prompt_for(&entries, PROMPT_CHARS)
         .map(|terms| format!("Names and terms: {terms}."));
     let wav = wav(samples);
@@ -310,10 +329,7 @@ pub(crate) fn transcribe(
     }
 
     let raw = parse(&body)?;
-    let learn = !crate::transcription::gradium::learning_disabled();
     let (transcript, corrected, learned_pairs) = if learn {
-        let entries = crate::dictation::vocabulary::entries();
-        let mut learned = crate::transcription::gradium::learning::Learned::load();
         learned.apply(&raw, &entries, configured)
     } else {
         (raw, 0, 0)

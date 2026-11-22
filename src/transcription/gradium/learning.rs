@@ -87,6 +87,28 @@ impl Learned {
         }
     }
 
+    /// Forgets the corrections named by `(heard, right)` pairs after they
+    /// have been saved into the vocabulary. Newer corrections with other
+    /// spellings stay for the next import.
+    pub(crate) fn forget(pairs: &[(String, String)]) {
+        let mut learned = Self::load();
+        let before = learned.corrections.len();
+        let terms_before = learned.terms.len();
+        learned.corrections.retain(|correction| {
+            !pairs
+                .iter()
+                .any(|(heard, right)| correction.heard == *heard && correction.right == *right)
+        });
+        learned.terms.retain(|term| {
+            !pairs
+                .iter()
+                .any(|(_, right)| term.term.trim().eq_ignore_ascii_case(right.trim()))
+        });
+        if learned.corrections.len() != before || learned.terms.len() != terms_before {
+            learned.save();
+        }
+    }
+
     /// Fixes a transcript with the vocabulary, the configured pairs, and the
     /// pairs learned before. Returns the text, how many words changed, and
     /// how many new pairs this clip taught.

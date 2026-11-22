@@ -104,6 +104,43 @@ impl VocabularyEditor {
         self.rows.last().map(|row| row.id)
     }
 
+    /// Adds learned `(heard, right)` corrections to the rows: the right
+    /// spelling's row gets the heard word as another "sounds like", or a new
+    /// row holds it. Returns whether any row changed.
+    pub(super) fn merge_learned(&mut self, corrections: &[(String, String)]) -> bool {
+        let mut changed = false;
+        for (heard, right) in corrections {
+            let right = right.trim();
+            if right.is_empty() {
+                continue;
+            }
+            if let Some(row) = self
+                .rows
+                .iter_mut()
+                .find(|row| row.term.text.trim().eq_ignore_ascii_case(right))
+            {
+                let mut sounds = vocabulary::parse_sounds_like(&row.sounds_like.text);
+                let heard = heard.trim();
+                if !heard.is_empty()
+                    && !sounds
+                        .iter()
+                        .any(|sound| sound.trim().eq_ignore_ascii_case(heard))
+                {
+                    sounds.push(heard.to_owned());
+                    row.sounds_like.text = sounds.join(", ");
+                    changed = true;
+                }
+            } else {
+                self.push(
+                    TextEdit::new(right.to_owned()),
+                    TextEdit::new(heard.trim().to_owned()),
+                );
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// The rows as saved entries: blank terms are left out and repeated
     /// terms merge, as `hex vocabulary add` does.
     pub(super) fn project(&self) -> Vec<VocabularyEntry> {
@@ -284,6 +321,27 @@ pub(super) fn close(ui: &mut Ui) {
     ui.vocabulary
         .rows
         .retain(|row| !row.term.text.trim().is_empty() || !row.sounds_like.text.trim().is_empty());
+}
+
+/// Imports learned corrections into the vocabulary once they save, then
+/// forgets them from the learning file so the pane is the one list. Returns
+/// whether there was anything to import.
+pub(super) fn sync_learned(ui: &mut Ui) -> bool {
+    let learned = crate::transcription::gradium::learning::Learned::load();
+    if learned.corrections.is_empty() {
+        return false;
+    }
+    let pairs: Vec<(String, String)> = learned
+        .corrections
+        .iter()
+        .map(|correction| (correction.heard.clone(), correction.right.clone()))
+        .collect();
+    ui.vocabulary.merge_learned(&pairs);
+    ui.flush_drafts();
+    if ui.settings.vocabulary == ui.vocabulary.project() {
+        crate::transcription::gradium::learning::Learned::forget(&pairs);
+    }
+    true
 }
 
 fn add_row(ui: &mut Ui) -> u64 {
@@ -561,6 +619,25 @@ mod tests {
 
         open(&mut ui);
         assert_eq!(ui.vocabulary.rows.len(), 1);
+    }
+
+    #[test]
+    fn learned_corrections_merge_into_terms_or_add_rows() {
+        let mut editor = VocabularyEditor::new(&[VocabularyEntry {
+            term: "Gradium".into(),
+            sounds_like: Vec::new(),
+        }]);
+        assert!(editor.merge_learned(&[("Gradiom".into(), "Gradium".into())]));
+        assert_eq!(
+            editor.project(),
+            [VocabularyEntry {
+                term: "Gradium".into(),
+                sounds_like: vec!["Gradiom".into()],
+            }]
+        );
+        assert!(editor.merge_learned(&[("Sfax".into(), "Sfax".into())]));
+        assert_eq!(editor.project()[1].term, "Sfax");
+        assert!(!editor.merge_learned(&[("Gradiom".into(), "Gradium".into())]));
     }
 
     #[test]

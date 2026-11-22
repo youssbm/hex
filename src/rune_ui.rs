@@ -1253,6 +1253,9 @@ impl Ui {
             self.ask(platform::PlatformRequest::EndHudDemo);
         }
         self.pane = pane;
+        if pane == Pane::Vocabulary {
+            vocabulary::sync_learned(self);
+        }
         match pane {
             Pane::History => self.history.reload(self.settings.labs.history_stats),
             Pane::HudLab => self.ask(platform::PlatformRequest::ConfigureHud(self.platform.hud)),
@@ -1401,6 +1404,9 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     }
     let now = Instant::now();
     let mut changed = ui.save_drafts(now);
+    if ui.pane == Pane::Vocabulary && ui.draft_since.is_none() {
+        changed |= vocabulary::sync_learned(ui);
+    }
     changed |= paste_access::poll(ui);
     // The OpenCode catalog is read only while a pane that uses it shows:
     // Modes, or Meetings › Settings while OpenCode writes the summaries.
