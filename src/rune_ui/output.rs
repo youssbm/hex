@@ -14,7 +14,7 @@ use rune_kit::{Button, ButtonVariant, TextArea};
 use super::ShortcutTarget;
 use super::controls::{
     ButtonKind, CardRow, DESCRIPTION, METRICS, Paint, PushSize, button, card, folding, page,
-    raised, section_with, status_dot,
+    raised, section_with, status_dot, toggle_row,
 };
 use super::lists::{Tone, tone_tag};
 use super::modes::{application_icon, monogram};
@@ -317,7 +317,7 @@ fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
             }
         },
     );
-    let mut rows: Vec<CardRow> = vec![prompt_row(ui, p).into()];
+    let mut rows: Vec<CardRow> = vec![prompt_row(ui, p).into(), final_dot_toggle(ui, p).into()];
     rows.push(
         col()
             .key("snippets-heading")
@@ -354,6 +354,23 @@ fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
         tr("Prompt and snippets"),
         save,
         rows,
+    )
+}
+
+/// Output › End with a dot: on leaves the final period the model wrote; off
+/// removes one before the dictation pastes. It applies to every mode.
+fn final_dot_toggle(ui: &Ui, p: Paint) -> El {
+    let on = ui.settings.dictation_processing.end_with_dot;
+    toggle_row(
+        p,
+        "end-with-dot",
+        tr("End with a dot"),
+        tr("Off removes the last period from each dictation."),
+        on,
+        |ui: &mut Ui| {
+            let on = !ui.settings.dictation_processing.end_with_dot;
+            ui.update(|settings| settings.dictation_processing.end_with_dot = on);
+        },
     )
 }
 
@@ -725,6 +742,9 @@ fn agent_prompt() -> String {
          picks a fast one you have connected; set it only if I ask for a particular \
          model (`opencode2 models` lists them). \
          If the rewrite fails or runs past the deadline, Hex pastes the text without it.\n\
+         \n\
+         `end_with_dot` is true by default and keeps the last period of a dictation; \
+         set it to false and Hex removes one before the text pastes.\n\
          \n\
          Built-in transformations: {builtins}. Others are functions in ~/.config/hex/hex.config.ts \
          (run `hex commands init` for its typings; the API, including fetch and \

@@ -273,6 +273,11 @@ pub(super) const KEYS: &[Key] = &[
         "Modes for specific apps and websites, as a JSON array",
     ),
     key(
+        "dictation_processing.end_with_dot",
+        Kind::Bool,
+        "Each dictation keeps its final period; off drops one before it pastes",
+    ),
+    key(
         "history_retention",
         Kind::Choice(&["off", "day", "week", "month", "forever"]),
         "How long dictation history is kept",

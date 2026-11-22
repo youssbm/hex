@@ -80,38 +80,12 @@ pub struct Profile {
     /// The mode's speech model and language while it matches the foreground
     /// app (Labs › Switch model with app).
     speech: Option<crate::app_settings::KeyboardModelChoice>,
+    /// Output › End with a dot off: the last stage removes one trailing
+    /// period before the text pastes. Every mode reads the same setting.
+    strip_final_dot: bool,
 }
 
 impl Profile {
-    /// Whether the prompt asks the result not to end with a dot. The
-    /// transcription services read the prompt as context, so Hex applies
-    /// this part itself after the last transformation.
-    fn wants_no_final_dot(&self) -> bool {
-        let prompt = self.prompt.to_lowercase();
-        [
-            "no end with a dot",
-            "not end with a dot",
-            "dont end with a dot",
-            "don't end with a dot",
-            "no dot at the end",
-            "no final dot",
-            "no trailing dot",
-            "without a final dot",
-            "without a trailing dot",
-            "no end with a period",
-            "not end with a period",
-            "dont end with a period",
-            "don't end with a period",
-            "no period at the end",
-            "no final period",
-            "no trailing period",
-            "without a final period",
-            "without a trailing period",
-        ]
-        .iter()
-        .any(|phrase| prompt.contains(phrase))
-    }
-
     pub fn new(name: impl Into<String>, prompt: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -123,6 +97,7 @@ impl Profile {
             transformations: Vec::new(),
             vocabulary: Vec::new(),
             speech: None,
+            strip_final_dot: false,
         }
     }
 
@@ -349,6 +324,7 @@ impl Profiles {
     ) -> Self {
         let mut global = Profile::from_mode(&settings.default_mode);
         global.name = "Global".into();
+        global.strip_final_dot = !settings.end_with_dot;
         // Snippets first, so they win a same-length overlap with a mode's
         // correction, then Global's corrections. Both apply to every mode.
         let mut rules = settings.snippets.clone();
@@ -357,7 +333,8 @@ impl Profiles {
         global.replacements = ReplacementSet::default();
         let mut profiles = Self::new(global).global_replacements(replacements);
         for mode in &settings.modes {
-            let profile = Profile::from_mode(mode);
+            let mut profile = Profile::from_mode(mode);
+            profile.strip_final_dot = !settings.end_with_dot;
             for application in &mode.applications {
                 let selector = if cfg!(target_os = "macos") {
                     ContextSelector::application(application.clone())
@@ -573,7 +550,7 @@ impl Profiles {
                 nothing: false,
                 observation,
                 transformations: profile.transformations.clone(),
-                strip_final_dot: profile.wants_no_final_dot(),
+                strip_final_dot: profile.strip_final_dot,
             };
         }
         let prompt = prompt(
@@ -615,7 +592,7 @@ impl Profiles {
             nothing: false,
             observation: Some(observation),
             transformations: profile.transformations.clone(),
-            strip_final_dot: profile.wants_no_final_dot(),
+            strip_final_dot: profile.strip_final_dot,
         }
     }
 }
@@ -1306,14 +1283,16 @@ impl Processed {
                 Err(error) => observation.fallback = Some(error),
             }
         }
-        if self.strip_final_dot && !cancelled.load(Ordering::Acquire) {
+        if self.strip_final_dot && source == Source::Dictation && !cancelled.load(Ordering::Acquire)
+        {
             self.text = strip_final_dot(&self.text);
         }
     }
 }
 
-/// Removes one trailing period, and the spaces before it, when a prompt
-/// asked not to end with a dot. Leaves `?` and `!` alone.
+/// Removes one trailing period, and the spaces before it, for a dictation
+/// whose Output setting asked it not to end with a dot. Leaves `?` and `!`
+/// alone.
 fn strip_final_dot(text: &str) -> String {
     let trimmed = text.trim_end();
     let Some(stripped) = trimmed.strip_suffix('.') else {
@@ -2983,18 +2962,32 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_asking_for_no_final_dot_strips_one() {
-        let asks = Profile::new(
-            "Global",
-            "Do no end with a dot at the end of transcription.",
-        );
-        assert!(asks.wants_no_final_dot());
+    fn the_end_with_dot_setting_reaches_every_mode() {
+        use crate::app_settings::{DictationMode, DictationProcessingSettings};
+        let mut settings = DictationProcessingSettings {
+            modes: vec![DictationMode {
+                name: "Notes".into(),
+                applications: vec!["Notes".into()],
+                ..DictationMode::default()
+            }],
+            ..DictationProcessingSettings::default()
+        };
+        let profiles = Profiles::from_settings(&settings);
+        assert!(!profiles.default.strip_final_dot);
+        assert!(!profiles.contextual[0].profile.strip_final_dot);
+
+        settings.end_with_dot = false;
+        let profiles = Profiles::from_settings(&settings);
+        assert!(profiles.default.strip_final_dot);
+        assert!(profiles.contextual[0].profile.strip_final_dot);
+    }
+
+    #[test]
+    fn stripping_a_final_dot_leaves_other_punctuation_alone() {
         assert_eq!(strip_final_dot("Hello."), "Hello");
         assert_eq!(strip_final_dot("Hello.  "), "Hello");
         assert_eq!(strip_final_dot("Hello?"), "Hello?");
+        assert_eq!(strip_final_dot("Hello!"), "Hello!");
         assert_eq!(strip_final_dot("."), "");
-
-        let plain = Profile::new("Global", "Rewrite the transcript clearly.");
-        assert!(!plain.wants_no_final_dot());
     }
 }

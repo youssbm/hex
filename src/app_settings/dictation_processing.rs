@@ -16,6 +16,14 @@ pub struct DictationProcessingSettings {
     /// address, a signature.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub snippets: Vec<TextReplacement>,
+    /// A dictation keeps the final period its text ends with. Off removes one
+    /// trailing period after the last transformation, before it pastes.
+    #[serde(default = "default_true")]
+    pub end_with_dot: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for DictationProcessingSettings {
@@ -27,6 +35,7 @@ impl Default for DictationProcessingSettings {
             },
             modes: Vec::new(),
             snippets: Vec::new(),
+            end_with_dot: true,
         }
     }
 }

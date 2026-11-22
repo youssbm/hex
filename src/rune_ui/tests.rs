@@ -3806,6 +3806,19 @@ fn the_trust_prompt_lists_what_a_config_reaches_until_it_is_allowed() {
     assert!(rt.find("allow-transformations").is_none());
 }
 
+/// Output › End with a dot: on by default, and the switch saves it off.
+#[test]
+fn output_keeps_the_final_dot_until_the_switch_is_off() {
+    let mut state = Ui::with(AppSettings::default(), Service::Fixture(Vec::new()));
+    output::fixture(&mut state);
+    state.pane = Pane::Output;
+    let mut rt = runtime_for(state, false, TALL_SIZE);
+    assert!(rt.find("end-with-dot").is_some());
+    assert!(rt.state.settings.dictation_processing.end_with_dot);
+    tap(&mut rt, "end-with-dot");
+    assert!(!rt.state.settings.dictation_processing.end_with_dot);
+}
+
 /// Labs › Transform typed text: Output's Typed text section and its
 /// recorder appear only with the lab on, and the recorder listens like the
 /// raw dictation shortcut's.
