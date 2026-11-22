@@ -470,7 +470,8 @@ mod tests {
         assert!(text.contains("filename=\"audio.wav\""));
         assert!(!text.contains("response_format"));
         assert!(text.ends_with("--b--\r\n"));
-        assert_eq!(&body[body.len() - wav.len() - 4..body.len() - 4], &wav[..]);
+        let start = body.len() - wav.len() - 9;
+        assert_eq!(&body[start..start + wav.len()], &wav[..]);
 
         let api = multipart("b", "whisper-1", None, "api_key", &wav);
         assert!(String::from_utf8_lossy(&api).contains("name=\"response_format\"\r\n\r\njson"));
