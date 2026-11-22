@@ -2175,6 +2175,7 @@ mod tests {
                 ..Default::default()
             }],
             snippets: Vec::new(),
+            end_with_dot: true,
         });
         let profile = profiles.select(&context("Notes", None));
         let labs = DictationLabs {
