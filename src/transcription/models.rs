@@ -424,9 +424,6 @@ impl ModelDefinition {
     }
 
     pub const fn download_bytes(&self) -> Option<u64> {
-        if self.id.is_cloud() {
-            return None;
-        }
         match self.runtime {
             ModelRuntime::Gguf(artifact) => Some(artifact.bytes),
             ModelRuntime::AppleSpeech => None,
