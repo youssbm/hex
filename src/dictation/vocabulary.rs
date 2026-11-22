@@ -344,7 +344,9 @@ pub(crate) fn transcription_prompt(max_chars: usize) -> Option<String> {
     prompt_for(&transcription_entries(), max_chars)
 }
 
-fn prompt_for(entries: &[VocabularyEntry], max_chars: usize) -> Option<String> {
+/// The context prompt a list of terms produces, comma-separated and within
+/// `max_chars`. `None` while the list is empty.
+pub(crate) fn prompt_for(entries: &[VocabularyEntry], max_chars: usize) -> Option<String> {
     let terms = &entries[..prompt_terms(entries, max_chars)];
     (!terms.is_empty()).then(|| {
         terms

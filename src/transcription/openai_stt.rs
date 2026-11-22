@@ -254,7 +254,8 @@ pub(crate) fn transcribe(
         .filter(|model| !model.is_empty())
         .unwrap_or_else(|| default_model(&config.backend));
     let language = language(config, selection_language);
-    let vocabulary = crate::dictation::vocabulary::transcription_prompt(PROMPT_CHARS)
+    let entries = crate::dictation::vocabulary::entries();
+    let vocabulary = crate::dictation::vocabulary::prompt_for(&entries, PROMPT_CHARS)
         .map(|terms| format!("Names and terms: {terms}."));
     let wav = wav(samples);
     if wav.len() > MAX_AUDIO_BYTES {
