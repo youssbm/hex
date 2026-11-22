@@ -50,6 +50,8 @@ pub(super) struct OutputPane {
     prompt: TextEdit,
     /// The saved prompt the draft above started from.
     prompt_base: String,
+    /// Whether the prompt was edited since Save or the switch last acted.
+    prompt_edited: bool,
     /// Edit with agent copied its prompt, until the pane is left.
     pub(super) prompt_copied: bool,
     /// The app rule opened to show its steps.
@@ -319,6 +321,7 @@ fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
                 .post_processing
                 .enabled
                 && !ui.output.prompt.text.trim().is_empty()
+                && ui.output.prompt_edited
                 && ui.models.available();
             if apply {
                 if ui.update(|settings| {
@@ -328,11 +331,13 @@ fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
                         .post_processing
                         .enabled = true;
                 }) {
+                    ui.output.prompt_edited = false;
                     ui.output.saved_at = Some(Instant::now());
                 }
             } else {
                 ui.flush_drafts();
                 if ui.error.is_none() {
+                    ui.output.prompt_edited = false;
                     ui.output.saved_at = Some(Instant::now());
                 }
             }
@@ -397,6 +402,7 @@ fn prompt_row(ui: &Ui, p: Paint) -> El {
                 .default_mode
                 .post_processing
                 .enabled;
+            ui.output.prompt_edited = false;
             ui.update(|settings| {
                 settings
                     .dictation_processing
@@ -457,7 +463,10 @@ fn prompt_row(ui: &Ui, p: Paint) -> El {
                 .placeholder(tr("Describe how OpenCode should rewrite your dictation."))
                 .rows(4)
                 .width(None)
-                .on_edit(|ui: &mut Ui| &mut ui.output.prompt)
+                .on_edit(|ui: &mut Ui| {
+                    ui.output.prompt_edited = true;
+                    &mut ui.output.prompt
+                })
                 .build(p.k)
                 .key("prompt-input"),
         )
