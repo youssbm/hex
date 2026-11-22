@@ -22,7 +22,6 @@ use super::spark::{Spark, spark};
 use super::{Ui, snippets};
 use crate::app_settings::{AppSettings, DictationMode};
 use crate::desktop::i18n::{tr, tr_fill};
-use crate::desktop::opencode_catalog::OpenCodeFeature;
 
 mod examples;
 
@@ -323,8 +322,7 @@ fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
                 .post_processing
                 .enabled
                 && !ui.output.prompt.text.trim().is_empty()
-                && ui.output.prompt.text != ui.output.prompt_saved
-                && ui.models.available();
+                && ui.output.prompt.text != ui.output.prompt_saved;
             if apply {
                 if ui.update(|settings| {
                     settings
@@ -394,9 +392,7 @@ fn prompt_row(ui: &Ui, p: Paint) -> El {
         .default_mode
         .post_processing
         .enabled;
-    let can_toggle = enabled || ui.models.available();
     let toggle = Switch::new(enabled)
-        .disabled(!can_toggle)
         .on_toggle(|ui: &mut Ui| {
             let enabled = ui
                 .settings
@@ -416,7 +412,7 @@ fn prompt_row(ui: &Ui, p: Paint) -> El {
         .build(p.k)
         .key("prompt-enabled")
         .label(tr("Use this prompt"));
-    let mut toggle_copy = col()
+    let toggle_copy = col()
         .key("copy")
         .gap(2.0)
         .child(text(tr("Use this prompt")).font(p.k.ty.ui).color(p.text()))
@@ -428,18 +424,6 @@ fn prompt_row(ui: &Ui, p: Paint) -> El {
             .color(p.muted())
             .wrap(),
         );
-    if let Some(reason) = (!can_toggle)
-        .then(|| super::models::unavailable_reason(ui, OpenCodeFeature::Transformation))
-        .flatten()
-    {
-        toggle_copy = toggle_copy.child(
-            text(reason)
-                .key("reason")
-                .font(DESCRIPTION)
-                .color(p.muted())
-                .wrap(),
-        );
-    }
     col()
         .key("prompt")
         .px(METRICS.row_px)
