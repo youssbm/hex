@@ -447,6 +447,19 @@ pub const SPEECH_DETECTOR_ARTIFACT: GgufArtifact = GgufArtifact {
 #[cfg_attr(test, allow(dead_code))]
 const SPEECH_DETECTOR_NAME: &str = "the speech detector";
 
+/// The models this build offers in the picker, the tray, and `hex models`.
+/// Everything else in [`MODELS`] stays compiled so a saved choice from before
+/// this build still resolves, but the app lists and recommends only these.
+pub(crate) const OFFERED_MODELS: &[TranscriptionModelId] = &[
+    TranscriptionModelId::OpenAiStt,
+    TranscriptionModelId::ParakeetUnifiedEnglish,
+    TranscriptionModelId::Gradium,
+];
+
+fn offered(model: TranscriptionModelId) -> bool {
+    OFFERED_MODELS.contains(&model)
+}
+
 pub const MODELS: &[ModelDefinition] = &[
     ModelDefinition {
         id: TranscriptionModelId::Gradium,
@@ -772,16 +785,10 @@ pub fn definition(id: TranscriptionModelId) -> &'static ModelDefinition {
         .expect("every transcription model id has a definition")
 }
 
-/// Every catalog model, then the imports while their Labs toggle is on.
+/// The offered catalog models, in catalog order. Imports stay out of this
+/// build's list, but a saved import still resolves through `definition`.
 pub fn all_models() -> Vec<&'static ModelDefinition> {
-    MODELS
-        .iter()
-        .chain(
-            super::custom_models::imported()
-                .into_iter()
-                .map(|import| import.definition),
-        )
-        .collect()
+    MODELS.iter().filter(|model| offered(model.id)).collect()
 }
 
 pub(crate) fn choices_for_runtime(language: &str) -> Vec<ModelChoice> {
@@ -878,22 +885,21 @@ pub(crate) fn picker_models(
     let recommended = choices_for_runtime(language);
     let others = MODELS
         .iter()
+        .filter(|model| offered(model.id))
         .filter(|model| model.available())
         .filter(|model| recommended.iter().all(|choice| choice.model.id != model.id));
     let (supporting, switching): (Vec<_>, Vec<_>) =
         others.partition(|model| model.supports_language(language));
-    // Imports follow, ready or not, so one that can't run can still be removed.
-    let imported = super::custom_models::imported()
-        .into_iter()
-        .map(|import| import.definition);
+    // Imports stay out of this build's list, even when a Labs toggle keeps
+    // them loadable, so the picker shows only the three offered models.
     recommended
         .iter()
+        .filter(|choice| offered(choice.model.id))
         .map(|choice| (choice.model, Some(choice.recommendation)))
         .chain(
             supporting
                 .into_iter()
                 .chain(switching)
-                .chain(imported)
                 .map(|model| (model, None)),
         )
         .collect()
@@ -1446,11 +1452,20 @@ pub fn recommended_selection(language: &str) -> TranscriptionSelection {
     let choices = choices_for_runtime(language);
     let model = choices
         .iter()
-        .find(|choice| choice.recommendation == Recommendation::Recommended)
-        .or_else(|| choices.first())
-        .map_or(TranscriptionModelId::ParakeetUnifiedEnglish, |choice| {
-            choice.model.id
-        });
+        .find(|choice| {
+            choice.recommendation == Recommendation::Recommended && offered(choice.model.id)
+        })
+        .or_else(|| choices.iter().find(|choice| offered(choice.model.id)))
+        .map_or_else(
+            || {
+                OFFERED_MODELS
+                    .iter()
+                    .copied()
+                    .find(|id| definition(*id).supports_language(language))
+                    .unwrap_or(TranscriptionModelId::ParakeetUnifiedEnglish)
+            },
+            |choice| choice.model.id,
+        );
     TranscriptionSelection {
         model,
         language: language.into(),
@@ -1811,18 +1826,13 @@ mod tests {
     }
 
     #[test]
-    fn every_language_has_exactly_one_recommended_model() {
+    fn every_language_recommends_an_offered_model_that_speaks_it() {
         for (language, _) in LANGUAGES {
-            let recommended: Vec<_> = choices_for_runtime(language)
-                .into_iter()
-                .filter(|choice| choice.recommendation == Recommendation::Recommended)
-                .map(|choice| choice.model.id)
-                .collect();
-            assert_eq!(recommended.len(), 1, "{language}: {recommended:?}");
-            assert_eq!(
-                recommended_selection(language).model,
-                recommended[0],
-                "{language}"
+            let selection = recommended_selection(language);
+            assert!(offered(selection.model), "{language}: {selection:?}");
+            assert!(
+                definition(selection.model).supports_language(language),
+                "{language}: {selection:?}"
             );
         }
     }
@@ -2187,7 +2197,7 @@ mod tests {
     }
 
     #[test]
-    fn every_language_choice_supports_its_language_and_first_run_picks_it() {
+    fn every_language_choice_supports_its_language_and_first_run_picks_an_offered_model() {
         for (language, _) in LANGUAGES {
             let choices = choices_for_runtime(language);
             assert!(!choices.is_empty(), "{language}");
@@ -2197,46 +2207,50 @@ mod tests {
             }
             let selection = recommended_selection(language);
             assert!(validate(&selection).is_ok(), "{language}");
+            assert!(offered(selection.model), "{language}");
         }
         assert_eq!(
             recommended_selection("el").model,
-            TranscriptionModelId::CohereTranscribe
+            TranscriptionModelId::OpenAiStt
         );
         assert_eq!(
             recommended_selection("tr").model,
-            TranscriptionModelId::WhisperLargeV3Turbo
+            TranscriptionModelId::OpenAiStt
         );
     }
 
     #[test]
-    fn the_picker_lists_every_model_with_the_language_s_recommendations_first() {
+    fn the_picker_lists_only_the_offered_models_with_recommendations_first() {
         let ids = |language| {
             picker_models(language)
                 .into_iter()
                 .map(|(model, recommendation)| (model.id, recommendation))
                 .collect::<Vec<_>>()
         };
-        let available = MODELS.iter().filter(|model| model.available()).count();
         for (language, _) in LANGUAGES {
-            assert_eq!(ids(language).len(), available, "{language}");
+            let listed = ids(language);
+            assert_eq!(listed.len(), OFFERED_MODELS.len(), "{language}");
+            assert!(listed.iter().all(|(id, _)| offered(*id)), "{language}");
         }
+        let english = ids("en");
+        assert_eq!(
+            english[0],
+            (
+                TranscriptionModelId::ParakeetUnifiedEnglish,
+                Some(Recommendation::Recommended)
+            )
+        );
+        // Greek: neither cloud model is a stock recommendation, so the
+        // offered models that support Greek come first, in catalog order.
         let greek = ids("el");
         assert_eq!(
-            greek[..2],
+            greek,
             [
-                (
-                    TranscriptionModelId::CohereTranscribe,
-                    Some(Recommendation::Recommended)
-                ),
-                (
-                    TranscriptionModelId::WhisperLargeV3Turbo,
-                    Some(Recommendation::Vocabulary)
-                ),
+                (TranscriptionModelId::Gradium, None),
+                (TranscriptionModelId::OpenAiStt, None),
+                (TranscriptionModelId::ParakeetUnifiedEnglish, None),
             ]
         );
-        // Then Parakeet v3, which supports Greek, before every model that
-        // would change the language.
-        assert_eq!(greek[2], (TranscriptionModelId::ParakeetV3, None));
         let supports = greek
             .iter()
             .map(|(id, _)| definition(*id).supports_language("el"))

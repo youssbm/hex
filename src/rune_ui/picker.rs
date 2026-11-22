@@ -1068,10 +1068,7 @@ mod tests {
     #[test]
     fn the_downloaded_total_adds_up_hexs_own_files() {
         let models = transcription_models::picker_models("en");
-        let installed = [
-            TranscriptionModelId::ParakeetUnifiedEnglish,
-            TranscriptionModelId::WhisperLargeV3Turbo,
-        ];
+        let installed = [TranscriptionModelId::ParakeetUnifiedEnglish];
         let expected: u64 = installed
             .iter()
             .filter_map(|id| transcription_models::definition(*id).download_bytes())
@@ -1079,16 +1076,6 @@ mod tests {
         assert!(expected > 0);
         let downloaded = |model: &ModelDefinition| installed.contains(&model.id);
         assert_eq!(downloaded_total(&models, downloaded, |_| true), expected);
-        // A file another app keeps isn't counted.
-        let whisper = transcription_models::definition(TranscriptionModelId::WhisperLargeV3Turbo)
-            .download_bytes()
-            .unwrap();
-        assert_eq!(
-            downloaded_total(&models, downloaded, |model| {
-                model.id != TranscriptionModelId::WhisperLargeV3Turbo
-            }),
-            expected - whisper
-        );
         assert_eq!(bytes_label(2_400_000_000), "2.4 GB");
         assert_eq!(bytes_label(640_000_000), "640 MB");
     }
