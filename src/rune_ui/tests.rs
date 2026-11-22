@@ -2882,17 +2882,15 @@ fn a_modes_language_menu_opens_on_its_chosen_language() {
     );
 }
 
-/// General's Vocabulary row opens the sheet, and Escape closes it.
+/// The Vocabulary pane is a sidebar destination, not a sheet.
 #[test]
-fn the_vocabulary_row_opens_its_sheet() {
+fn the_vocabulary_pane_lists_terms() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    tap(&mut rt, "vocabulary-control");
+    rt.state.pane = Pane::Vocabulary;
+    rt.invalidate();
     settle(&mut rt);
-    assert!(rt.state.vocabulary.open);
-    assert!(rt.find("add-term").is_some());
-    assert!(rt.find("vocabulary-boost").is_none());
-    key(&mut rt, Key::Escape, Mods::default());
-    settle(&mut rt);
+    assert!(rt.find("add-term-pane").is_some());
+    assert!(rt.find("vocabulary-scroll").is_some());
     assert!(!rt.state.vocabulary.open);
 }
 
@@ -2964,7 +2962,7 @@ fn the_wheel_scrolls_a_long_term_list() {
     rt.state.vocabulary = super::vocabulary::VocabularyEditor::new(&rt.state.settings.vocabulary);
     rt.invalidate();
     settle(&mut rt);
-    tap(&mut rt, "vocabulary-control");
+    super::vocabulary::open(&mut rt.state);
     settle(&mut rt);
     let first = |rt: &Runtime<Ui>| element(rt, "term0").rect[1];
     let list = element(&rt, "term-scroll").rect;
@@ -3029,46 +3027,40 @@ fn wheel_down(rt: &mut Runtime<Ui>, x: f32, y: f32, precise: bool) {
     settle(rt);
 }
 
-/// A model whose transcription takes no vocabulary says so on the Vocabulary
-/// row and in its sheet; Parakeet-based and prompt-reading models show none.
+/// A model whose transcription takes no vocabulary says so in the pane;
+/// OpenAI STT reads the list as its prompt, and Gradium and Parakeet take it
+/// too, so they show none.
 #[test]
-fn the_vocabulary_row_says_when_the_model_ignores_the_list() {
+fn the_vocabulary_pane_says_when_the_model_ignores_the_list() {
     let note = "Cohere Transcribe doesn't use these terms; rewriting and search still do";
     let shows_note = |rt: &Runtime<Ui>| texts(rt).iter().any(|text| text == note);
-    let sheet_note = |rt: &Runtime<Ui>| {
-        rt.elements()
-            .into_iter()
-            .any(|e| !e.exiting && e.key.as_deref() == Some("unused"))
-    };
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    assert!(!shows_note(&rt));
-    rt.state.settings.transcription.model = TranscriptionModelId::CohereTranscribe;
+    rt.state.pane = Pane::Vocabulary;
     rt.invalidate();
     settle(&mut rt);
-    assert!(shows_note(&rt), "{:?}", texts(&rt));
-    tap(&mut rt, "vocabulary-control");
-    assert!(rt.state.vocabulary.open);
-    assert!(sheet_note(&rt));
-    key(&mut rt, Key::Escape, Mods::default());
-    settle(&mut rt);
+    assert!(!shows_note(&rt));
     for model in [
-        TranscriptionModelId::UnderdogBark3Pro,
-        TranscriptionModelId::WhisperLargeV3Turbo,
-        TranscriptionModelId::QwenCleoAsr17B,
+        TranscriptionModelId::OpenAiStt,
+        TranscriptionModelId::Gradium,
+        TranscriptionModelId::ParakeetUnifiedEnglish,
     ] {
         rt.state.settings.transcription.model = model;
         rt.invalidate();
         settle(&mut rt);
-        assert!(
-            !texts(&rt)
-                .iter()
-                .any(|text| text.contains("doesn't use these terms"))
-        );
+        assert!(!shows_note(&rt), "{model:?}");
     }
+    rt.state.settings.transcription.model = TranscriptionModelId::CohereTranscribe;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(shows_note(&rt), "{:?}", texts(&rt));
 
     let rt = runtime("vocabulary-unused", true, PANE_SIZE);
     assert!(rt.state.vocabulary.open);
-    assert!(sheet_note(&rt));
+    assert!(
+        rt.elements()
+            .into_iter()
+            .any(|e| !e.exiting && e.key.as_deref() == Some("unused"))
+    );
 }
 
 /// The Sounds row opens the sheet. A set's play button plays its dictation

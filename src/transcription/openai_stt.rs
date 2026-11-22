@@ -23,6 +23,9 @@ const MAX_AUDIO_BYTES: usize = 25 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const DEADLINE: Duration = Duration::from_secs(120);
 const SAMPLE_RATE: u32 = 16_000;
+/// Characters of the vocabulary sent as the transcription prompt. The
+/// service's prompt slot is a few hundred tokens; this stays well inside it.
+pub(crate) const PROMPT_CHARS: usize = 800;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
@@ -251,6 +254,8 @@ pub(crate) fn transcribe(
         .filter(|model| !model.is_empty())
         .unwrap_or_else(|| default_model(&config.backend));
     let language = language(config, selection_language);
+    let vocabulary = crate::dictation::vocabulary::transcription_prompt(PROMPT_CHARS)
+        .map(|terms| format!("Names and terms: {terms}."));
     let wav = wav(samples);
     if wav.len() > MAX_AUDIO_BYTES {
         return Err(eyre!(
@@ -260,7 +265,14 @@ pub(crate) fn transcribe(
     }
 
     let boundary = boundary();
-    let body = multipart(&boundary, model, language.as_deref(), &config.backend, &wav);
+    let body = multipart(
+        &boundary,
+        model,
+        language.as_deref(),
+        vocabulary.as_deref(),
+        &config.backend,
+        &wav,
+    );
     let agent = crate::net::agent(url, |config| {
         config
             .http_status_as_error(false)
@@ -309,6 +321,7 @@ pub(crate) fn transcribe(
         ms = started.elapsed().as_millis(),
         backend = %config.backend,
         model = %model,
+        prompt_chars = vocabulary.as_ref().map_or(0, |prompt| prompt.chars().count()),
         corrected,
         learned = learned_pairs,
         chars = transcript.chars().count(),
@@ -326,11 +339,13 @@ fn boundary() -> String {
 }
 
 /// The multipart body `server.py` builds: `model`, an optional `language`,
-/// `response_format` for the official API, and the WAV file.
+/// the vocabulary `prompt`, `response_format` for the official API, and the
+/// WAV file.
 fn multipart(
     boundary: &str,
     model: &str,
     language: Option<&str>,
+    prompt: Option<&str>,
     backend: &str,
     wav: &[u8],
 ) -> Vec<u8> {
@@ -338,6 +353,9 @@ fn multipart(
     field(&mut out, boundary, "model", model);
     if let Some(language) = language {
         field(&mut out, boundary, "language", language);
+    }
+    if let Some(prompt) = prompt {
+        field(&mut out, boundary, "prompt", prompt);
     }
     if !backend.trim().eq_ignore_ascii_case("codex_session") {
         field(&mut out, boundary, "response_format", "json");
@@ -461,19 +479,21 @@ mod tests {
             "b",
             "gpt-4o-mini-transcribe",
             Some("en"),
+            Some("Names and terms: Rune."),
             "codex_session",
             &wav,
         );
         let text = String::from_utf8_lossy(&body);
         assert!(text.contains("name=\"model\"\r\n\r\ngpt-4o-mini-transcribe"));
         assert!(text.contains("name=\"language\"\r\n\r\nen"));
+        assert!(text.contains("name=\"prompt\"\r\n\r\nNames and terms: Rune."));
         assert!(text.contains("filename=\"audio.wav\""));
         assert!(!text.contains("response_format"));
         assert!(text.ends_with("--b--\r\n"));
         let start = body.len() - wav.len() - 9;
         assert_eq!(&body[start..start + wav.len()], &wav[..]);
 
-        let api = multipart("b", "whisper-1", None, "api_key", &wav);
+        let api = multipart("b", "whisper-1", None, None, "api_key", &wav);
         assert!(String::from_utf8_lossy(&api).contains("name=\"response_format\"\r\n\r\njson"));
     }
 

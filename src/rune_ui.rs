@@ -420,6 +420,7 @@ pub(crate) enum Destination {
     Meetings(Option<String>),
     Modes,
     Snippets,
+    Vocabulary,
     History,
 }
 
@@ -433,6 +434,7 @@ pub(crate) fn destination(pane: Option<crate::control::Pane>) -> Destination {
         Some(Named::Models) => Destination::Models,
         Some(Named::Modes) => Destination::Modes,
         Some(Named::Snippets) => Destination::Snippets,
+        Some(Named::Vocabulary) => Destination::Vocabulary,
         Some(Named::History) => Destination::History,
         Some(Named::Meetings) => Destination::Meetings(None),
     }
@@ -451,6 +453,7 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
             }
         }
         Destination::Snippets => Pane::Snippets,
+        Destination::Vocabulary => Pane::Vocabulary,
         Destination::History => Pane::History,
     };
     ui.close_dialogs();
@@ -1557,6 +1560,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         Pane::General => (Vec::new(), general::pane(ui, p, &mut layer)),
         Pane::Output => (Vec::new(), output::pane(ui, p, cx.is_reduced_motion())),
         Pane::Snippets => (Vec::new(), snippets::pane(ui, p)),
+        Pane::Vocabulary => (Vec::new(), vocabulary::pane(ui, p)),
         Pane::Modes => modes::pane(ui, p, &mut layer),
         Pane::History => history::pane(ui, p, cx, &mut layer),
         #[cfg(hex_capture)]

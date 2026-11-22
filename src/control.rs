@@ -72,6 +72,7 @@ pub enum Pane {
     #[value(alias = "replacements")]
     Modes,
     Snippets,
+    Vocabulary,
     History,
     Meetings,
 }

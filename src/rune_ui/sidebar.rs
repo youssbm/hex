@@ -23,6 +23,11 @@ static SNIPPETS_ICON: Icon = Icon {
     view: 24.0,
     body: include_str!("../../assets/icons/snippets.svg"),
 };
+static VOCABULARY_ICON: Icon = Icon {
+    name: "hex-vocabulary",
+    view: 24.0,
+    body: include_str!("../../assets/icons/vocabulary.svg"),
+};
 static HISTORY_ICON: Icon = Icon {
     name: "hex-history",
     view: 24.0,
@@ -67,6 +72,9 @@ pub(super) enum Pane {
     Output,
     /// Saved text a spoken shortcut expands to, in every dictation.
     Snippets,
+    /// Names and jargon Hex should spell right, sent to the speech model and
+    /// used by corrections and search.
+    Vocabulary,
     /// The old per-app editor, in the sidebar while Labs › Modes editor is on
     /// (the `--snap` scenes render it directly).
     Modes,
@@ -98,6 +106,7 @@ impl Pane {
         Pane::General,
         Pane::Output,
         Pane::Snippets,
+        Pane::Vocabulary,
         Pane::Modes,
         Pane::Meetings,
         Pane::History,
@@ -135,6 +144,7 @@ impl Pane {
             Pane::General => tr("General"),
             Pane::Output => tr("Output"),
             Pane::Snippets => tr("Snippets"),
+            Pane::Vocabulary => tr("Vocabulary"),
             Pane::Modes => tr("Modes"),
             Pane::History => tr("History"),
             #[cfg(hex_capture)]
@@ -154,6 +164,7 @@ impl Pane {
             Pane::General => "nav-general",
             Pane::Output => "nav-output",
             Pane::Snippets => "nav-snippets",
+            Pane::Vocabulary => "nav-vocabulary",
             Pane::Modes => "nav-modes",
             Pane::History => "nav-history",
             #[cfg(hex_capture)]
@@ -173,6 +184,7 @@ impl Pane {
             Pane::General => &SETTINGS_ICON,
             Pane::Output => &OUTPUT_ICON,
             Pane::Snippets => &SNIPPETS_ICON,
+            Pane::Vocabulary => &VOCABULARY_ICON,
             Pane::Modes => &MODES_ICON,
             Pane::History => &HISTORY_ICON,
             #[cfg(hex_capture)]

@@ -389,6 +389,12 @@ impl ModelDefinition {
     /// checks the model itself before it adds the list to a run). Rewriting
     /// and search use the vocabulary with every model.
     pub fn vocabulary_use(&self) -> VocabularyUse {
+        if self.id == TranscriptionModelId::Gradium {
+            return VocabularyUse::Bias;
+        }
+        if self.id == TranscriptionModelId::OpenAiStt {
+            return VocabularyUse::Prompt;
+        }
         if self.id.is_cloud() {
             return VocabularyUse::None;
         }
@@ -411,6 +417,12 @@ impl ModelDefinition {
         &self,
         entries: &[crate::dictation::vocabulary::VocabularyEntry],
     ) -> usize {
+        if self.id == TranscriptionModelId::OpenAiStt {
+            return crate::dictation::vocabulary::prompt_terms(
+                entries,
+                crate::transcription::openai_stt::PROMPT_CHARS,
+            );
+        }
         match self.runtime {
             ModelRuntime::Gguf(artifact) => {
                 crate::dictation::vocabulary::terms_read(entries, artifact.architecture)

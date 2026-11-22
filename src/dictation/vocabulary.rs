@@ -356,7 +356,7 @@ fn prompt_for(entries: &[VocabularyEntry], max_chars: usize) -> Option<String> {
 }
 
 /// How many of the first terms fit `max_chars` joined by ", ".
-fn prompt_terms(entries: &[VocabularyEntry], max_chars: usize) -> usize {
+pub(crate) fn prompt_terms(entries: &[VocabularyEntry], max_chars: usize) -> usize {
     let mut chars = 0;
     for (index, entry) in entries.iter().enumerate() {
         let separator = if index == 0 { 0 } else { 2 };

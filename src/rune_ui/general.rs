@@ -185,25 +185,6 @@ pub(super) fn basics(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Option<El> {
     if let Some(row) = language_row(ui, p, layer) {
         rows.push(row.into());
     }
-    let vocabulary_note = super::vocabulary::unused_note(ui);
-    rows.push(
-        icon_row(
-            p,
-            "vocabulary",
-            &BOOK,
-            tr("Vocabulary"),
-            vocabulary_note.as_deref(),
-            value_button(
-                p,
-                "vocabulary-control",
-                tr("Vocabulary"),
-                &super::vocabulary::summary(ui),
-                &rune_theme_opencode::icons::CHEVRON_RIGHT,
-                super::vocabulary::open,
-            ),
-        )
-        .into(),
-    );
     rows.extend(microphone_rows(ui, p, layer));
     let (_, row) = microphone_release_row(ui, p);
     rows.push(row);

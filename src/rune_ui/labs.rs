@@ -40,7 +40,12 @@ pub(super) static LABS_ICON: Icon = Icon {
 /// while its lab is on, History, then the features turned on (Meetings and
 /// Voice Filter from Labs, Annotate in dev builds).
 pub(super) fn main_panes(ui: &Ui) -> Vec<Pane> {
-    let mut panes = vec![Pane::General, Pane::Output, Pane::Snippets];
+    let mut panes = vec![
+        Pane::General,
+        Pane::Output,
+        Pane::Snippets,
+        Pane::Vocabulary,
+    ];
     if Pane::Modes.shown(ui) {
         panes.push(Pane::Modes);
     }

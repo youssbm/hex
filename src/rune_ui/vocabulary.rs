@@ -1,7 +1,8 @@
-//! Vocabulary: a sheet from General's Vocabulary row with one row per term
-//! and its "sounds like" spellings, edited in place and saved when typing
-//! pauses, like a mode's corrections. The boost has no control here; it
-//! stays a setting (`hex settings set vocabulary_boost`).
+//! Vocabulary: a sidebar pane with one row per term and its "sounds like"
+//! spellings, edited in place and saved when typing pauses, like a mode's
+//! corrections. The same editor still backs the sheet the playground scenes
+//! render. The boost has no control here; it stays a setting (`hex settings
+//! set vocabulary_boost`).
 
 use rune::tok::motion::{SETTLE, SETTLE_EXIT};
 use rune::{El, SpringPair, TextEdit, Transition, Tx, col, edit_access, el, row, text};
@@ -9,7 +10,8 @@ use rune_kit::{ControlSize, TextInput};
 
 use super::Ui;
 use super::controls::{
-    ButtonKind, DESCRIPTION, Paint, button, modal_scrim_transition, modal_transition, note,
+    ButtonKind, DESCRIPTION, METRICS, Paint, button, modal_scrim_transition, modal_transition,
+    note, page, raised, section_with,
 };
 use super::lists::remove_button;
 use crate::desktop::i18n::{tr, tr_fill, tr_named};
@@ -127,7 +129,97 @@ impl VocabularyEditor {
     }
 }
 
-/// What General's Vocabulary row shows: how many terms are saved.
+/// The Vocabulary pane: the same editor the sheet uses, open in the sidebar
+/// and saved on pause.
+pub(super) fn pane(ui: &Ui, p: Paint) -> El {
+    let add = button(
+        p,
+        "add-term-pane",
+        tr("Add term"),
+        ButtonKind::Secondary,
+        |ui: &mut Ui, tx: &mut Tx| {
+            ui.vocabulary.added = Some(add_row(ui));
+            tx.scroll_to_bottom("vocabulary-scroll");
+        },
+    );
+    let mut rows: Vec<El> = Vec::new();
+    if ui.vocabulary.rows.is_empty() {
+        rows.push(
+            note(
+                "no-terms",
+                tr("No terms yet. Add a name, product, or jargon Hex should spell right."),
+                p.muted(),
+            )
+            .px(METRICS.row_px)
+            .py(10.0),
+        );
+    }
+    for entry in &ui.vocabulary.rows {
+        rows.push(term_row(p, entry, false).px(METRICS.row_px).py(6.0));
+    }
+    if ui.vocabulary.clamped() {
+        rows.push(
+            note(
+                "limits",
+                tr("Up to 16 spellings per term are saved, and 64 characters per term or spelling."),
+                p.danger(),
+            )
+            .px(METRICS.row_px)
+            .py(10.0),
+        );
+    }
+    let content = page("vocabulary-content")
+        .child(intro(ui, p))
+        .child(section_with(
+            p,
+            "vocabulary",
+            tr("Your vocabulary"),
+            add,
+            rows,
+        ));
+    super::scroll_body(p.k, "vocabulary-scroll", content)
+}
+
+/// The pane's opening card: what the list does, how many terms it holds, and
+/// what the selected model reads.
+fn intro(ui: &Ui, p: Paint) -> El {
+    let mut notes = Vec::new();
+    if let Some(unused) = unused_note(ui) {
+        notes.push(unused);
+    }
+    if let Some(budget) = budget_note(ui) {
+        notes.push(budget);
+    }
+    raised(p, "vocabulary-intro").child(
+        col()
+            .key("copy")
+            .px(METRICS.row_px)
+            .py(14.0)
+            .gap(4.0)
+            .child(
+                text(tr("Names Hex should spell right."))
+                    .font(p.k.ty.body_medium)
+                    .color(p.text()),
+            )
+            .child(
+                text(tr_fill(
+                    "{} · Sent to the speech model, and used by corrections and search.",
+                    &summary(ui),
+                ))
+                .font(p.k.ty.small)
+                .color(p.muted()),
+            )
+            .children(notes.into_iter().map(|note| {
+                text(note)
+                    .key("note")
+                    .font(DESCRIPTION)
+                    .color(p.muted())
+                    .wrap()
+            })),
+    )
+}
+
+/// The pane's term count.
 pub(super) fn summary(ui: &Ui) -> String {
     match ui.settings.vocabulary.len() {
         0 => tr("None").to_string(),
