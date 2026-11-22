@@ -214,6 +214,8 @@ fn downloads(entry: &Entry) -> bool {
 pub(super) fn blurb(def: &ModelDefinition) -> &'static str {
     use TranscriptionModelId as M;
     match def.id {
+        M::Gradium => tr("Sends the clip to Gradium, with Parakeet offline"),
+        M::OpenAiStt => tr("Sends the clip to OpenAI, with Parakeet offline"),
         M::ParakeetUnifiedEnglish => {
             tr("Writes while you talk, so the text is ready when you let go")
         }

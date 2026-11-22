@@ -420,6 +420,7 @@ mod tests {
                     ..DictationMode::default()
                 },
             ],
+            snippets: Vec::new(),
         };
         let matched = |application: Option<&str>, host: Option<&str>| {
             speech_for(&settings, application, host).map(|choice| choice.language)

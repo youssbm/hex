@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use color_eyre::eyre::{eyre, Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, eyre};
 use serde::Deserialize;
 
 pub(crate) mod learning;
@@ -279,6 +279,9 @@ mod tests {
             api_key: String::new(),
             language: None,
             model: None,
+            boost: None,
+            learn: None,
+            corrections: BTreeMap::new(),
         };
         assert_eq!(language(&config, "en"), "en");
         assert_eq!(language(&config, "pt-BR"), "pt");

@@ -2146,6 +2146,7 @@ mod tests {
                 replacements: vec![pair("thank you", "cheers")],
                 ..Default::default()
             }],
+            snippets: Vec::new(),
         });
         let profile = profiles.select(&context("Notes", None));
         let labs = DictationLabs {
