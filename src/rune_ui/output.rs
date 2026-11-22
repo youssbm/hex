@@ -6,18 +6,18 @@
 //! can be.
 
 use rune::{El, TextEdit, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, TextInput};
+use rune_kit::{Button, ButtonVariant, TextArea, TextInput};
 
 use super::controls::{
     ButtonKind, CardRow, DESCRIPTION, METRICS, Paint, PushSize, button, card, folding, note, page,
-    raised, status_dot,
+    raised, section_with, status_dot,
 };
 use super::icons::MIC;
 use super::lists::{Tone, tone_tag};
 use super::modes::{application_icon, monogram};
 use super::spark::{Spark, spark};
-use super::{ShortcutTarget, Ui};
-use crate::app_settings::DictationMode;
+use super::{ShortcutTarget, Ui, snippets};
+use crate::app_settings::{AppSettings, DictationMode};
 use crate::desktop::i18n::{tr, tr_fill};
 use crate::dictation::text_replacements::ReplacementSet;
 
@@ -47,6 +47,10 @@ const TRY_FIELD: f32 = 28.0;
 pub(super) struct OutputPane {
     /// The Try field's sentence.
     pub(super) trial: TextEdit,
+    /// The OpenCode rewrite prompt, as edited on this pane.
+    prompt: TextEdit,
+    /// The saved prompt the draft above started from.
+    prompt_base: String,
     /// Edit with agent copied its prompt, until the pane is left.
     pub(super) prompt_copied: bool,
     /// The Try sentence Labs › Fix results in Output's Fix this copied a
@@ -63,12 +67,45 @@ pub(super) struct OutputPane {
 }
 
 impl OutputPane {
-    /// The pane for a window, its examples in a fresh order.
-    pub(super) fn shuffled() -> Self {
+    /// The pane for a window, its examples in a fresh order and its prompt
+    /// read from `settings`.
+    pub(super) fn shuffled(settings: &AppSettings) -> Self {
         Self {
             order: examples::Order::shuffled(),
+            ..Self::new(settings)
+        }
+    }
+
+    pub(super) fn new(settings: &AppSettings) -> Self {
+        let prompt = settings
+            .dictation_processing
+            .default_mode
+            .post_processing
+            .prompt
+            .clone();
+        Self {
+            prompt: TextEdit::new(prompt.clone()),
+            prompt_base: prompt,
             ..Self::default()
         }
+    }
+
+    /// Writes the prompt field into `settings`, as the other editors do.
+    pub(super) fn project(&self, settings: &mut AppSettings) {
+        settings
+            .dictation_processing
+            .default_mode
+            .post_processing
+            .prompt = self.prompt.text.clone();
+    }
+
+    /// Takes a prompt saved elsewhere when this field holds no unsaved typing,
+    /// so an external `hex settings set` lands without losing a draft.
+    pub(super) fn rebase_prompt(&mut self, current: &str) {
+        if self.prompt.text == self.prompt_base && self.prompt_base != current {
+            self.prompt = TextEdit::new(current.to_owned());
+        }
+        self.prompt_base = current.to_owned();
     }
 }
 
@@ -197,6 +234,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, reduced: bool) -> El {
     let mut content = page("output-content")
         .children(trust_card(ui, p))
         .child(agent_card(ui, p, reduced))
+        .child(prompt_and_snippets(ui, p))
         .child(every_dictation(ui, p, &processing.default_mode));
     #[cfg(target_os = "linux")]
     if ui.settings.labs.typed_text {
@@ -267,6 +305,89 @@ fn agent_card(ui: &Ui, p: Paint, reduced: bool) -> El {
                     .child(edit),
             ),
     )
+}
+
+/// The prompt that tells the OpenCode rewrite how to write, and the spoken
+/// snippets, both edited here and saved to `settings.json`.
+fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
+    let save = button(
+        p,
+        "save-prompt-snippets",
+        tr("Save"),
+        ButtonKind::Primary,
+        |ui: &mut Ui, _: &mut Tx| ui.flush_drafts(),
+    );
+    let mut rows: Vec<CardRow> = vec![prompt_row(ui, p).into()];
+    rows.push(
+        col()
+            .key("snippets-heading")
+            .px(METRICS.row_px)
+            .pt(14.0)
+            .pb(4.0)
+            .gap(4.0)
+            .child(
+                row()
+                    .key("title-row")
+                    .gap(8.0)
+                    .center_y()
+                    .child(
+                        text(tr("Snippets"))
+                            .key("title")
+                            .font(p.k.ty.ui)
+                            .color(p.text())
+                            .grow(1.0),
+                    )
+                    .child(snippets::add_button(p)),
+            )
+            .child(
+                text(tr("Say a shortcut, and Hex pastes the saved text."))
+                    .key("description")
+                    .font(DESCRIPTION)
+                    .color(p.muted()),
+            )
+            .into(),
+    );
+    rows.extend(snippets::list(ui, p).into_iter().map(CardRow::from));
+    section_with(
+        p,
+        "prompt-and-snippets",
+        tr("Prompt and snippets"),
+        save,
+        rows,
+    )
+}
+
+/// The OpenCode rewrite prompt's field, with the job it does.
+fn prompt_row(ui: &Ui, p: Paint) -> El {
+    col()
+        .key("prompt")
+        .px(METRICS.row_px)
+        .py(14.0)
+        .gap(6.0)
+        .child(
+            text(tr("How Hex should write"))
+                .key("title")
+                .font(p.k.ty.ui)
+                .color(p.text()),
+        )
+        .child(
+            text(tr(
+                "Used by the OpenCode rewrite: spelling, punctuation, tone, and format.",
+            ))
+            .key("description")
+            .font(DESCRIPTION)
+            .color(p.muted())
+            .wrap(),
+        )
+        .child(
+            TextArea::new(&ui.output.prompt)
+                .placeholder(tr("Describe how OpenCode should rewrite your dictation."))
+                .rows(4)
+                .width(None)
+                .on_edit(|ui: &mut Ui| &mut ui.output.prompt)
+                .build(p.k)
+                .key("prompt-input"),
+        )
 }
 
 /// The trust prompt: the config can reach the network or run programs, and
@@ -879,5 +1000,30 @@ mod tests {
         assert!(fix.ends_with(
             "What I want: When I say \"open code shipped\", Hex pastes \"opencode shipped\". It should paste: "
         ));
+    }
+
+    #[test]
+    fn the_prompt_projects_and_keeps_an_unsaved_draft() {
+        let settings = AppSettings::default();
+        let mut pane = OutputPane::new(&settings);
+        pane.prompt = TextEdit::new("Say it plainly.".to_string());
+        let mut candidate = settings.clone();
+        pane.project(&mut candidate);
+        assert_eq!(
+            candidate
+                .dictation_processing
+                .default_mode
+                .post_processing
+                .prompt,
+            "Say it plainly."
+        );
+
+        // An external save never overwrites typing, but lands once the field
+        // is clean.
+        pane.rebase_prompt("From elsewhere.");
+        assert_eq!(pane.prompt.text, "Say it plainly.");
+        pane.prompt = TextEdit::new("From elsewhere.".to_string());
+        pane.rebase_prompt("From elsewhere.");
+        assert_eq!(pane.prompt.text, "From elsewhere.");
     }
 }

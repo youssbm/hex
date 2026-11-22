@@ -782,7 +782,8 @@ impl Ui {
             });
         }
         ui.history = history::HistoryPane::shared(store);
-        ui.output = output::OutputPane::shuffled();
+        let output = output::OutputPane::shuffled(&ui.settings);
+        ui.output = output;
         ui.modes.load_personal_commands();
         ui.platform.developer =
             crate::dev_build::is_dev_build() && crate::DEVELOPER_FEATURES_ENABLED;
@@ -797,6 +798,7 @@ impl Ui {
         let modes = modes::ModesPane::new(&settings);
         let vocabulary = vocabulary::VocabularyEditor::new(&settings.vocabulary);
         let snippets = snippets::SnippetsPane::new(&settings);
+        let output = output::OutputPane::new(&settings);
         Self {
             settings,
             #[cfg(test)]
@@ -833,7 +835,7 @@ impl Ui {
             #[cfg(hex_capture)]
             captures: captures::CapturesPane::default(),
             modes,
-            output: output::OutputPane::default(),
+            output,
             snippets,
             picker: picker::Picker::default(),
             found: found::FoundState::default(),
@@ -925,6 +927,14 @@ impl Ui {
         );
         self.settings = candidate;
         self.modes.committed(&self.settings);
+        self.output.rebase_prompt(
+            &self
+                .settings
+                .dictation_processing
+                .default_mode
+                .post_processing
+                .prompt,
+        );
         self.snippets
             .rebase(&self.settings.dictation_processing.snippets);
         self.draft_since = None;
@@ -944,6 +954,7 @@ impl Ui {
     fn drafted(&self) -> AppSettings {
         let mut candidate = self.settings.clone();
         self.modes.project(&mut candidate);
+        self.output.project(&mut candidate);
         candidate.vocabulary = self.vocabulary.project();
         candidate.dictation_processing.snippets = self.snippets.project();
         self.lab_store.project_phrase(&mut candidate);
@@ -1143,6 +1154,13 @@ impl Ui {
                 self.vocabulary.reload(&service.vocabulary);
             }
             self.snippets.rebase(&service.dictation_processing.snippets);
+            self.output.rebase_prompt(
+                &service
+                    .dictation_processing
+                    .default_mode
+                    .post_processing
+                    .prompt,
+            );
             // Only a saved phrase that actually changed may reset the field,
             // so any other external save leaves its focus and caret alone. A
             // lab toggled elsewhere resyncs it, dropping a stale draft.

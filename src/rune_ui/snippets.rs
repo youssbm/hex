@@ -85,14 +85,30 @@ fn remove_snippet(ui: &mut Ui, index: usize) {
 }
 
 pub(super) fn pane(ui: &Ui, p: Paint) -> El {
-    let add = IconButton::new(PLUS)
+    let add = add_button(p).mr(-4.0);
+    let content = page("snippets-content").child(intro(p)).child(section_with(
+        p,
+        "snippets",
+        tr("Your snippets"),
+        add,
+        list(ui, p),
+    ));
+    super::scroll_body(p.k, "snippets-scroll", content)
+}
+
+/// The Add control, shared with the Output pane's snippet section.
+pub(super) fn add_button(p: Paint) -> El {
+    IconButton::new(PLUS)
         .variant(IconButtonVariant::Ghost)
         .control_size(ControlSize::Regular)
         .label(tr("Add snippet"))
         .on_press(add_snippet)
         .build(p.k)
-        .key("add-snippet");
+        .key("add-snippet")
+}
 
+/// The snippet rows, or a note when there are none, shared with Output.
+pub(super) fn list(ui: &Ui, p: Paint) -> Vec<El> {
     let mut rows = Vec::new();
     if ui.snippets.rows.is_empty() {
         rows.push(note(
@@ -141,15 +157,7 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> El {
                 )),
         );
     }
-
-    let content = page("snippets-content").child(intro(p)).child(section_with(
-        p,
-        "snippets",
-        tr("Your snippets"),
-        add.mr(-4.0),
-        rows,
-    ));
-    super::scroll_body(p.k, "snippets-scroll", content)
+    rows
 }
 
 fn intro(p: Paint) -> El {
