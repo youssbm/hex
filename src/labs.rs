@@ -1265,13 +1265,13 @@ mod tests {
     }
 
     #[test]
-    fn spoken_formatting_is_its_own_bit_and_off_by_default() {
+    fn spoken_formatting_is_its_own_bit_and_on_by_default() {
         let mut labs = LabsSettings::default();
-        assert_eq!(encode(&labs) & SPOKEN_FORMATTING, 0);
-        labs.spoken_formatting = true;
+        assert_ne!(encode(&labs) & SPOKEN_FORMATTING, 0);
+        labs.spoken_formatting = false;
         labs.unload_idle_minutes = 60;
         let state = encode(&labs);
-        assert_ne!(state & SPOKEN_FORMATTING, 0);
+        assert_eq!(state & SPOKEN_FORMATTING, 0);
         assert_eq!(state >> MINUTES_SHIFT, 60);
     }
 

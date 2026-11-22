@@ -262,10 +262,9 @@ fn missing_permissions_lead_settings_and_open_the_guide() {
     let mut rt = runtime("mac-settings-permissions", true, (980.0, 2400.0));
     let shown = texts(&rt);
     assert!(shown.iter().any(|text| text == "Permissions needed"));
-    assert!(
-        rt.find("permission-microphone-allow-control/mark/dot")
-            .is_none()
-    );
+    assert!(rt
+        .find("permission-microphone-allow-control/mark/dot")
+        .is_none());
     tap(&mut rt, "permission-microphone-allow");
     assert_eq!(
         asked(&rt),
@@ -427,12 +426,12 @@ fn contributed_options_are_labs_toggles_off_by_default() {
     ] {
         assert!(rt.find(row).is_some(), "Labs lacks {row}");
     }
-    assert!(!rt.state.settings.labs.spoken_formatting);
-    tap(&mut rt, "lab-spoken-formatting");
     assert!(rt.state.settings.labs.spoken_formatting);
-    assert!(!rt.state.settings.labs.spoken_symbols);
-    tap(&mut rt, "lab-spoken-symbols");
+    tap(&mut rt, "lab-spoken-formatting");
+    assert!(!rt.state.settings.labs.spoken_formatting);
     assert!(rt.state.settings.labs.spoken_symbols);
+    tap(&mut rt, "lab-spoken-symbols");
+    assert!(!rt.state.settings.labs.spoken_symbols);
     assert!(!rt.state.settings.labs.filler_words);
     tap(&mut rt, "lab-filler-words");
     assert!(rt.state.settings.labs.filler_words);
@@ -538,11 +537,9 @@ fn on_this_mac_without_apple_intelligence_stays_chosen_with_the_fix() {
     assert!(texts(&rt).iter().any(|text| {
         text == "Turn on Apple Intelligence in System Settings to write them on this Mac"
     }));
-    assert!(
-        texts(&rt)
-            .iter()
-            .any(|text| text == "Turn on Apple Intelligence in System Settings")
-    );
+    assert!(texts(&rt)
+        .iter()
+        .any(|text| text == "Turn on Apple Intelligence in System Settings"));
     tap(&mut rt, "meeting-summaries-menu-item2");
     assert_eq!(rt.state.settings.meetings.summaries, MeetingSummaries::Mac);
     assert!(rt.find("meeting-summary-model").is_none());
@@ -652,11 +649,9 @@ fn the_meeting_summary_model_is_picked_from_opencode_s_models() {
     assert!(rt.state.models.picker.is_open());
     tap(&mut rt, "model-picker-option-0");
     assert_eq!(rt.state.settings.meetings.opencode_model, None);
-    assert!(
-        texts(&rt)
-            .iter()
-            .any(|text| text == "OpenCode's default model")
-    );
+    assert!(texts(&rt)
+        .iter()
+        .any(|text| text == "OpenCode's default model"));
 
     let rt = runtime("meetings-summary-model-not-running", true, size);
     assert!(rt.find("opencode-unavailable").is_some());
@@ -1620,11 +1615,9 @@ fn deleting_a_meeting_takes_the_menu_then_a_confirmation() {
         Some("preview-notes")
     );
     assert!(asked(&rt).is_empty(), "the first step only arms");
-    assert!(
-        texts(&rt)
-            .iter()
-            .any(|text| text == "Trash recording & Markdown")
-    );
+    assert!(texts(&rt)
+        .iter()
+        .any(|text| text == "Trash recording & Markdown"));
     tap(&mut rt, "meeting-confirm-delete");
     assert_eq!(
         asked(&rt),
@@ -1632,13 +1625,12 @@ fn deleting_a_meeting_takes_the_menu_then_a_confirmation() {
             "preview-notes".into()
         ))]
     );
-    assert!(
-        rt.state
-            .meetings
-            .meetings
-            .iter()
-            .all(|m| m.id != "preview-notes")
-    );
+    assert!(rt
+        .state
+        .meetings
+        .meetings
+        .iter()
+        .all(|m| m.id != "preview-notes"));
 
     let mut rt = runtime("meetings-delete", true, PANE_SIZE);
     key(&mut rt, Key::Escape, Mods::default());
@@ -1660,11 +1652,10 @@ fn the_overflow_menu_copies_the_summary_and_asks_for_new_notes() {
     let mut rt = runtime("meetings-actions", true, PANE_SIZE);
     let copy = menu_item(&rt, "meeting-actions", "Copy summary");
     tap(&mut rt, &copy);
-    assert!(
-        rt.copy_request
-            .as_deref()
-            .is_some_and(|summary| summary.starts_with("One login"))
-    );
+    assert!(rt
+        .copy_request
+        .as_deref()
+        .is_some_and(|summary| summary.starts_with("One login")));
     assert_eq!(rt.state.open, Some(Menu::MeetingActions), "stays open");
     let regenerate = menu_item(&rt, "meeting-actions", "Regenerate summary");
     tap(&mut rt, &regenerate);
@@ -1833,11 +1824,9 @@ fn a_grant_waiting_for_a_restart_makes_setup_restart_hex() {
 fn a_refused_microphone_points_to_system_settings() {
     let mut rt = runtime("mac-onboarding-denied", true, PANE_SIZE);
     let shown = texts(&rt);
-    assert!(
-        shown
-            .iter()
-            .any(|text| text == "Switch on Hex in System Settings")
-    );
+    assert!(shown
+        .iter()
+        .any(|text| text == "Switch on Hex in System Settings"));
     tap(&mut rt, "mic-pill-allow");
     assert_eq!(
         asked(&rt),
@@ -1878,11 +1867,9 @@ fn stale_permissions_offer_fix_it_and_reset_entries_across_panes() {
     let mut rt = runtime("mac-onboarding-stale", true, PANE_SIZE);
     let shown = texts(&rt);
     assert!(shown.iter().any(|text| text == "Still grey? Fix it"));
-    assert!(
-        shown
-            .iter()
-            .any(|text| text == "An older Hex entry can keep this off")
-    );
+    assert!(shown
+        .iter()
+        .any(|text| text == "An older Hex entry can keep this off"));
     tap(&mut rt, "ax-pill-allow");
     assert_eq!(
         asked(&rt).last(),
@@ -1896,11 +1883,9 @@ fn stale_permissions_offer_fix_it_and_reset_entries_across_panes() {
     let mut rt = runtime("mac-settings-permissions-stale", true, PANE_SIZE);
     let shown = texts(&rt);
     assert!(shown.iter().any(|text| text == "Still grey? Fix it"));
-    assert!(
-        shown
-            .iter()
-            .any(|text| text == "An older Hex entry can keep this off")
-    );
+    assert!(shown
+        .iter()
+        .any(|text| text == "An older Hex entry can keep this off"));
     tap(&mut rt, "permission-accessibility-allow");
     assert_eq!(
         asked(&rt),
@@ -1917,11 +1902,9 @@ fn stale_permissions_offer_fix_it_and_reset_entries_across_panes() {
     refresh(&mut rt);
     let shown = texts(&rt);
     assert!(shown.iter().any(|text| text == "Still grey? Fix it"));
-    assert!(
-        shown
-            .iter()
-            .any(|text| text == "An older Hex entry can keep this off")
-    );
+    assert!(shown
+        .iter()
+        .any(|text| text == "An older Hex entry can keep this off"));
     tap(&mut rt, "meeting-system-audio-allow");
     assert_eq!(
         asked(&rt),
@@ -2064,11 +2047,9 @@ fn voice_filter_setup_distinguishes_an_available_input_from_a_call() {
         .unwrap()
         .mic_in_use = false;
     refresh(&mut rt);
-    assert!(
-        texts(&rt)
-            .iter()
-            .any(|s| s.contains("Select Hex Microphone"))
-    );
+    assert!(texts(&rt)
+        .iter()
+        .any(|s| s.contains("Select Hex Microphone")));
     assert!(!texts(&rt).iter().any(|s| s.contains("Slack")));
     let linux = runtime("voice-filter-unavailable", true, PANE_SIZE);
     assert!(texts(&linux).iter().any(|s| s.contains("pw-cat")));
@@ -2195,11 +2176,10 @@ fn hud_lab_tunes_dot_scope() {
     assert_eq!(lab.tuning.glow, 2.0);
     assert_eq!(lab.demo, platform::HudDemo::Processing);
     tap(&mut rt, "dot-scope-copy");
-    assert!(
-        rt.copy_request
-            .as_deref()
-            .is_some_and(|json| json.contains("\"glow\": 2.0"))
-    );
+    assert!(rt
+        .copy_request
+        .as_deref()
+        .is_some_and(|json| json.contains("\"glow\": 2.0")));
     assert!(rt.state.hud_copied);
     tap(&mut rt, "dot-scope-save");
     assert!(matches!(
@@ -3152,11 +3132,9 @@ fn activity_lists_events_and_shows_the_raw_one() {
     assert!(texts(&rt).iter().any(|t| t == "Context changed to Slack"));
     tap(&mut rt, "activity-event4");
     assert_eq!(rt.state.activity.selected, Some(4));
-    assert!(
-        texts(&rt)
-            .iter()
-            .any(|t| t.contains("\"application\":\"Slack\""))
-    );
+    assert!(texts(&rt)
+        .iter()
+        .any(|t| t.contains("\"application\":\"Slack\"")));
 }
 
 #[test]
@@ -3188,32 +3166,26 @@ fn a_side_that_would_collide_is_refused() {
     };
     ui.settings.dictation_hotkey = option(ModifierSide::Left);
     ui.settings.paste_last_hotkey = Some(option(ModifierSide::Right));
-    assert!(
-        platform_settings::side_binding(
-            &ui.settings,
-            ShortcutTarget::Dictation,
-            ModifierSide::Right
-        )
-        .is_none()
-    );
-    assert!(
-        platform_settings::side_binding(
-            &ui.settings,
-            ShortcutTarget::Dictation,
-            ModifierSide::Left
-        )
-        .is_some()
-    );
+    assert!(platform_settings::side_binding(
+        &ui.settings,
+        ShortcutTarget::Dictation,
+        ModifierSide::Right
+    )
+    .is_none());
+    assert!(platform_settings::side_binding(
+        &ui.settings,
+        ShortcutTarget::Dictation,
+        ModifierSide::Left
+    )
+    .is_some());
 }
 
 #[test]
 fn macos_27_names_accessibility_as_system_settings_does() {
     let rt = runtime("mac-settings-permissions", true, (980.0, 2400.0));
-    assert!(
-        texts(&rt)
-            .iter()
-            .any(|t| t == "Device Control and Data Access")
-    );
+    assert!(texts(&rt)
+        .iter()
+        .any(|t| t == "Device Control and Data Access"));
 }
 
 #[test]
