@@ -258,6 +258,7 @@ impl Updater {
         let disabled = if option_env!("HEX_TEST_BUILD") == Some("1")
             || updates_off_by_env()
             || crate::transcription::gradium::active().is_some()
+            || crate::transcription::openai_stt::active().is_some()
         {
             Some(DesktopUpdateStatus::Unavailable)
         } else if crate::app_paths::is_local_build() {

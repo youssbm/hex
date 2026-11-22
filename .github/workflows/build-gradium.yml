@@ -34,6 +34,13 @@ jobs:
           $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" -replace '\\','/'
           $combined = if ($env:CMAKE_PREFIX_PATH) { "$prefix;$env:CMAKE_PREFIX_PATH" } else { $prefix }
           Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$combined"
+      - name: Test the cloud transcription clients
+        shell: pwsh
+        run: |
+          cargo test --locked transcription::openai_stt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked transcription::gradium::learning
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: cargo build --locked --release
       - uses: actions/upload-artifact@v4
         with:

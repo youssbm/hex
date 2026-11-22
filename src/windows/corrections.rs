@@ -2,10 +2,10 @@
 //!
 //! After a paste, the same field is read through Windows UI Automation for a
 //! short while. When the person selects a word and retypes it, the one-for-one
-//! replacement becomes a Gradium correction, so the next dictation gets the
-//! word right. The field's text is never stored or logged, password fields are
-//! skipped, and reading stops after the watch window or when another dictation
-//! starts.
+//! replacement becomes a correction in the shared dictionary, so the next
+//! dictation gets the word right. The field's text is never stored or logged,
+//! password fields are skipped, and reading stops after the watch window or
+//! when another dictation starts.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -33,18 +33,21 @@ const MAX_CHARS: usize = 120_000;
 /// The newest watcher; an older one exits at its next poll.
 static LATEST: AtomicU64 = AtomicU64::new(0);
 
-/// Starts watching `window` for an edit of `pasted`. Does nothing unless
-/// Gradium learning is on.
+/// Starts watching `window` for an edit of `pasted`. Does nothing unless the
+/// shared dictionary's learning is on.
 pub(crate) fn watch(window: isize, pasted: String) {
-    if window == 0 || !crate::transcription::gradium::learning_enabled() {
+    let learning = crate::transcription::gradium::learning_enabled()
+        || (crate::transcription::openai_stt::active().is_some()
+            && !crate::transcription::gradium::learning_disabled());
+    if window == 0 || !learning {
         return;
     }
     let id = LATEST.fetch_add(1, Ordering::AcqRel) + 1;
     if let Err(error) = thread::Builder::new()
-        .name("gradium-corrections".into())
+        .name("dictation-corrections".into())
         .spawn(move || run(id, window, pasted))
     {
-        tracing::warn!(%error, "could not start the Gradium correction watcher");
+        tracing::warn!(%error, "could not start the dictation correction watcher");
     }
 }
 
@@ -97,7 +100,7 @@ fn run(id: u64, window: isize, pasted: String) {
             }
         }
         if learned > 0 {
-            tracing::info!(learned, "learned a Gradium correction from an edit");
+            tracing::info!(learned, "learned a dictation correction from an edit");
         }
         return;
     }

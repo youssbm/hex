@@ -34,6 +34,11 @@ pub use super::model_benchmarks::{BenchmarkRecord, benchmark};
 pub enum TranscriptionModelId {
     #[default]
     ParakeetUnifiedEnglish,
+    /// Gradium's speech API, with Parakeet as its offline fallback.
+    Gradium,
+    /// OpenAI's transcription API (or the ChatGPT session), with Parakeet as
+    /// its offline fallback.
+    OpenAiStt,
     ParakeetV2,
     ParakeetV3,
     Orukeet,
@@ -73,6 +78,8 @@ impl TranscriptionModelId {
     pub fn as_str(&self) -> &str {
         match self {
             Self::ParakeetUnifiedEnglish => "parakeet_unified_en",
+            Self::Gradium => "gradium",
+            Self::OpenAiStt => "openai_stt",
             Self::ParakeetV2 => "parakeet_v2",
             Self::ParakeetV3 => "parakeet_v3",
             Self::Orukeet => "orukeet",
@@ -100,6 +107,12 @@ impl TranscriptionModelId {
         matches!(self, Self::Custom(_))
     }
 
+    /// A model that sends the clip to a service, with a local model as its
+    /// offline fallback. Cloud models never stream.
+    pub const fn is_cloud(self) -> bool {
+        matches!(self, Self::Gradium | Self::OpenAiStt)
+    }
+
     /// A model behind its own Labs toggle: an import, or Parakeet Ultra. A
     /// saved choice of one stays saved while it can't run, and the listener
     /// runs a fallback (`custom_models::runnable`).
@@ -114,6 +127,8 @@ impl FromStr for TranscriptionModelId {
     fn from_str(value: &str) -> Result<Self> {
         match value {
             "parakeet_unified_en" => Ok(Self::ParakeetUnifiedEnglish),
+            "gradium" => Ok(Self::Gradium),
+            "openai_stt" => Ok(Self::OpenAiStt),
             "parakeet_v2" => Ok(Self::ParakeetV2),
             "parakeet_v3" => Ok(Self::ParakeetV3),
             "orukeet" => Ok(Self::Orukeet),
@@ -358,6 +373,9 @@ impl ModelDefinition {
     }
 
     pub fn size_label(&self) -> String {
+        if self.id.is_cloud() {
+            return "Cloud".into();
+        }
         match self.runtime {
             ModelRuntime::AppleSpeech => "Managed".into(),
             ModelRuntime::Gguf(artifact) if artifact.bytes >= 1_000_000_000 => {
@@ -371,6 +389,9 @@ impl ModelDefinition {
     /// checks the model itself before it adds the list to a run). Rewriting
     /// and search use the vocabulary with every model.
     pub fn vocabulary_use(&self) -> VocabularyUse {
+        if self.id.is_cloud() {
+            return VocabularyUse::None;
+        }
         match self.runtime {
             ModelRuntime::Gguf(artifact) if artifact.architecture == "parakeet" => {
                 VocabularyUse::Bias
@@ -403,6 +424,9 @@ impl ModelDefinition {
     }
 
     pub const fn download_bytes(&self) -> Option<u64> {
+        if self.id.is_cloud() {
+            return None;
+        }
         match self.runtime {
             ModelRuntime::Gguf(artifact) => Some(artifact.bytes),
             ModelRuntime::AppleSpeech => None,
@@ -428,8 +452,37 @@ const SPEECH_DETECTOR_NAME: &str = "the speech detector";
 
 pub const MODELS: &[ModelDefinition] = &[
     ModelDefinition {
+        id: TranscriptionModelId::Gradium,
+        name: "Gradium",
+        realtime: "Cloud",
+        // The service manages the model; its accuracy figure is not
+        // comparable with the local models' benchmarks.
+        word_error_rate: None,
+        streams: false,
+        // The local model that answers when the service is unreachable, and
+        // the one that has to be installed for this choice to load.
+        runtime: ModelRuntime::Gguf(&PARAKEET_UNIFIED_ENGLISH_ARTIFACT),
+        languages: &["*"],
+        accepts_language_hint: true,
+        supports_language_detection: true,
+    },
+    ModelDefinition {
+        id: TranscriptionModelId::OpenAiStt,
+        name: "OpenAI STT",
+        realtime: "Cloud",
+        // OpenAI publishes no WER comparable with the local models'.
+        word_error_rate: None,
+        streams: false,
+        // Parakeet answers when the service is unreachable, and has to be
+        // installed for this choice to load.
+        runtime: ModelRuntime::Gguf(&PARAKEET_UNIFIED_ENGLISH_ARTIFACT),
+        languages: &["*"],
+        accepts_language_hint: true,
+        supports_language_detection: true,
+    },
+    ModelDefinition {
         id: TranscriptionModelId::ParakeetUnifiedEnglish,
-        name: "Gradium (Parakeet fallback)",
+        name: "Parakeet Unified English",
         realtime: "~163x",
         word_error_rate: Some(1.60),
         streams: true,

@@ -413,7 +413,7 @@ impl LocalTranscriber {
             prewarm_ms = started.elapsed().as_millis(),
             "prewarmed local transcription model"
         );
-        transcriber.stream = if crate::transcription::gradium::active().is_some() {
+        transcriber.stream = if selection.model.is_cloud() {
             None
         } else {
             transcriber
@@ -732,18 +732,47 @@ impl LocalTranscriber {
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(config) = &gradium {
-            match crate::transcription::gradium::transcribe(
-                config,
-                samples,
-                &self.selection.language,
-            ) {
-                Ok(text) => return Ok(text),
-                Err(error) => tracing::warn!(
-                    error = format!("{error:#}"),
-                    "Gradium transcription failed; falling back to the local model"
-                ),
+        match self.selection.model {
+            TranscriptionModelId::Gradium => {
+                if let Some(config) = &gradium {
+                    match crate::transcription::gradium::transcribe(
+                        config,
+                        samples,
+                        &self.selection.language,
+                    ) {
+                        Ok(text) => return Ok(text),
+                        Err(error) => tracing::warn!(
+                            error = format!("{error:#}"),
+                            "Gradium transcription failed; falling back to the local model"
+                        ),
+                    }
+                } else {
+                    tracing::warn!(
+                        "Gradium is selected but gradium.json is missing; transcribing locally"
+                    );
+                }
             }
+            TranscriptionModelId::OpenAiStt => {
+                if let Some(config) = crate::transcription::openai_stt::active() {
+                    match crate::transcription::openai_stt::transcribe(
+                        &config,
+                        samples,
+                        &self.selection.language,
+                        &configured,
+                    ) {
+                        Ok(text) => return Ok(text),
+                        Err(error) => tracing::warn!(
+                            error = format!("{error:#}"),
+                            "OpenAI STT transcription failed; falling back to the local model"
+                        ),
+                    }
+                } else {
+                    tracing::warn!(
+                        "OpenAI STT is selected but openai-stt.json is missing; transcribing locally"
+                    );
+                }
+            }
+            _ => {}
         }
         let run = |this: &mut Self| {
             this.session
