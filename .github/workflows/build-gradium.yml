@@ -41,6 +41,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked transcription::gradium::learning
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked transcription::gguf_session::tests::auto_needs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: cargo build --locked --release
       - uses: actions/upload-artifact@v4
         with:

@@ -70,6 +70,13 @@ pub(crate) fn validate_gguf_artifact(
             artifact.variant
         ));
     }
+    // A cloud model's GGUF is only its offline fallback: the service detects
+    // the language, so the fallback's own capabilities must not refuse Auto.
+    if definition.id.is_cloud() {
+        return Ok(definition
+            .runtime_language_hint(&selection.language)
+            .map(str::to_string));
+    }
     // Auto gates a hint, so it needs detection only from a model that takes
     // one: a no-hint head (Parakeet v3, Granite) hears the language itself,
     // whatever its file's lang_detect metadata says.
@@ -1364,6 +1371,14 @@ mod tests {
             validate_auto(TranscriptionModelId::WhisperLargeV3Turbo, true).unwrap(),
             None
         );
+        // A cloud model's detection lives in the service; its Parakeet
+        // fallback must still load under Auto.
+        for model in [
+            TranscriptionModelId::Gradium,
+            TranscriptionModelId::OpenAiStt,
+        ] {
+            assert_eq!(validate_auto(model, false).unwrap(), None, "{model:?}");
+        }
     }
 
     #[test]
