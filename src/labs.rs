@@ -1330,13 +1330,15 @@ mod tests {
     }
 
     #[test]
-    fn spoken_symbols_is_its_own_bit_and_off_by_default() {
+    fn spoken_symbols_and_formatting_are_their_own_bits_and_on_by_default() {
         let mut labs = LabsSettings::default();
-        assert_eq!(encode(&labs) & SPOKEN_SYMBOLS, 0);
-        labs.spoken_symbols = true;
+        assert_ne!(encode(&labs) & SPOKEN_SYMBOLS, 0);
+        assert_ne!(encode(&labs) & SPOKEN_FORMATTING, 0);
+        labs.spoken_symbols = false;
+        labs.spoken_formatting = false;
         labs.unload_idle_minutes = 24 * 60;
         let state = encode(&labs);
-        assert_ne!(state & SPOKEN_SYMBOLS, 0);
+        assert_eq!(state & SPOKEN_SYMBOLS, 0);
         assert_eq!(state & SPOKEN_FORMATTING, 0);
         assert_eq!(state & SMART_SPACING, 0);
         assert_eq!(state >> MINUTES_SHIFT, 24 * 60);

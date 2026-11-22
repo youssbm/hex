@@ -26,10 +26,31 @@ const SYMBOLS: &[(&[&str], char, Join)] = &[
     (&["at", "sign"], '@', Join::Next),
     (&["underscore"], '_', Join::Both),
     (&["hyphen"], '-', Join::Both),
+    (&["dash"], '-', Join::Both),
+    (&["dot"], '.', Join::Both),
     (&["slash"], '/', Join::Both),
+    (&["backslash"], '\\', Join::Both),
     (&["comma"], ',', Join::Previous),
     (&["semicolon"], ';', Join::Previous),
     (&["colon"], ':', Join::Previous),
+    (&["question", "mark"], '?', Join::Previous),
+    (&["exclamation", "mark"], '!', Join::Previous),
+    (&["exclamation", "point"], '!', Join::Previous),
+    (&["open", "parenthesis"], '(', Join::Next),
+    (&["close", "parenthesis"], ')', Join::Previous),
+    (&["open", "paren"], '(', Join::Next),
+    (&["close", "paren"], ')', Join::Previous),
+    (&["open", "bracket"], '[', Join::Next),
+    (&["close", "bracket"], ']', Join::Previous),
+    (&["open", "brace"], '{', Join::Next),
+    (&["close", "brace"], '}', Join::Previous),
+    (&["plus"], '+', Join::Both),
+    (&["equals"], '=', Join::Both),
+    (&["percent"], '%', Join::Previous),
+    (&["dollar", "sign"], '$', Join::Next),
+    (&["asterisk"], '*', Join::Both),
+    (&["ampersand"], '&', Join::Both),
+    (&["pipe"], '|', Join::Both),
     (&["arroba"], '@', Join::Next),
     (&["guion", "bajo"], '_', Join::Both),
     (&["guion"], '-', Join::Both),
@@ -168,6 +189,18 @@ mod tests {
         assert_eq!(apply("hola coma gracias"), "hola, gracias");
         assert_eq!(apply("la lista dos puntos manzanas"), "la lista: manzanas");
         assert_eq!(apply("hola comma gracias"), "hola, gracias");
+    }
+
+    #[test]
+    fn punctuation_commands_join_or_space_as_written() {
+        assert_eq!(apply("youssef dot bm 2008"), "youssef.bm 2008");
+        assert_eq!(apply("youssef dash bm"), "youssef-bm");
+        assert_eq!(apply("youssef underscore"), "youssef_");
+        assert_eq!(apply("how are you question mark"), "how are you?");
+        assert_eq!(apply("wow exclamation mark"), "wow!");
+        assert_eq!(apply("open parenthesis hello close parenthesis"), "(hello)");
+        assert_eq!(apply("mail me at sign home dot com"), "mail me @home.com");
+        assert_eq!(apply("fifty percent off"), "fifty% off");
     }
 
     #[test]
