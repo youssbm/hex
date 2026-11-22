@@ -5,8 +5,10 @@
 //! agent, which copies a prompt saying where the steps live and what each
 //! can be.
 
+use std::time::{Duration, Instant};
+
 use rune::{El, TextEdit, Tx, col, row, text};
-use rune_kit::{Button, ButtonVariant, TextArea};
+use rune_kit::{Button, ButtonVariant, Switch, TextArea};
 
 #[cfg(target_os = "linux")]
 use super::ShortcutTarget;
@@ -20,6 +22,7 @@ use super::spark::{Spark, spark};
 use super::{Ui, snippets};
 use crate::app_settings::{AppSettings, DictationMode};
 use crate::desktop::i18n::{tr, tr_fill};
+use crate::desktop::opencode_catalog::OpenCodeFeature;
 
 mod examples;
 
@@ -57,6 +60,8 @@ pub(super) struct OutputPane {
     pub(super) order: examples::Order,
     /// The agent card's turning spark.
     pub(super) spark: Spark,
+    /// When Save last committed, so its label says Saved briefly.
+    saved_at: Option<Instant>,
 }
 
 impl OutputPane {
@@ -104,7 +109,17 @@ impl OutputPane {
 
 /// Steps the agent card's examples to `clock`; true when they changed.
 pub(super) fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
-    let (changed, wait) = examples::poll(&mut ui.output.examples, clock);
+    let mut changed = false;
+    if ui
+        .output
+        .saved_at
+        .is_some_and(|at| at.elapsed() >= Duration::from_secs(2))
+    {
+        ui.output.saved_at = None;
+        changed = true;
+    }
+    let (examples_changed, wait) = examples::poll(&mut ui.output.examples, clock);
+    changed |= examples_changed;
     let wait = wait.min(super::spark::poll(&ui.output.spark, clock));
     if ui.window.as_ref().is_none_or(rune::AppHandle::is_visible) {
         tx.wake_after(std::time::Duration::from_secs_f64(wait.max(0.0)));
@@ -286,12 +301,42 @@ fn agent_card(ui: &Ui, p: Paint, reduced: bool) -> El {
 /// The prompt that tells the OpenCode rewrite how to write, and the spoken
 /// snippets, both edited here and saved to `settings.json`.
 fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
+    let label = if ui.output.saved_at.is_some() {
+        tr("Saved")
+    } else {
+        tr("Save")
+    };
     let save = button(
         p,
         "save-prompt-snippets",
-        tr("Save"),
+        label,
         ButtonKind::Primary,
-        |ui: &mut Ui, _: &mut Tx| ui.flush_drafts(),
+        |ui: &mut Ui, _: &mut Tx| {
+            let apply = !ui
+                .settings
+                .dictation_processing
+                .default_mode
+                .post_processing
+                .enabled
+                && !ui.output.prompt.text.trim().is_empty()
+                && ui.models.available();
+            if apply {
+                if ui.update(|settings| {
+                    settings
+                        .dictation_processing
+                        .default_mode
+                        .post_processing
+                        .enabled = true;
+                }) {
+                    ui.output.saved_at = Some(Instant::now());
+                }
+            } else {
+                ui.flush_drafts();
+                if ui.error.is_none() {
+                    ui.output.saved_at = Some(Instant::now());
+                }
+            }
+        },
     );
     let mut rows: Vec<CardRow> = vec![prompt_row(ui, p).into()];
     rows.push(
@@ -333,8 +378,60 @@ fn prompt_and_snippets(ui: &Ui, p: Paint) -> El {
     )
 }
 
-/// The OpenCode rewrite prompt's field, with the job it does.
+/// The OpenCode rewrite prompt's field, the switch that applies it, and the
+/// job it does.
 fn prompt_row(ui: &Ui, p: Paint) -> El {
+    let enabled = ui
+        .settings
+        .dictation_processing
+        .default_mode
+        .post_processing
+        .enabled;
+    let can_toggle = enabled || ui.models.available();
+    let toggle = Switch::new(enabled)
+        .disabled(!can_toggle)
+        .on_toggle(|ui: &mut Ui| {
+            let enabled = ui
+                .settings
+                .dictation_processing
+                .default_mode
+                .post_processing
+                .enabled;
+            ui.update(|settings| {
+                settings
+                    .dictation_processing
+                    .default_mode
+                    .post_processing
+                    .enabled = !enabled;
+            });
+        })
+        .build(p.k)
+        .key("prompt-enabled")
+        .label(tr("Use this prompt"));
+    let mut toggle_copy = col()
+        .key("copy")
+        .gap(2.0)
+        .child(text(tr("Use this prompt")).font(p.k.ty.ui).color(p.text()))
+        .child(
+            text(tr(
+                "Rewrites every dictation with OpenCode before it pastes",
+            ))
+            .font(DESCRIPTION)
+            .color(p.muted())
+            .wrap(),
+        );
+    if let Some(reason) = (!can_toggle)
+        .then(|| super::models::unavailable_reason(ui, OpenCodeFeature::Transformation))
+        .flatten()
+    {
+        toggle_copy = toggle_copy.child(
+            text(reason)
+                .key("reason")
+                .font(DESCRIPTION)
+                .color(p.muted())
+                .wrap(),
+        );
+    }
     col()
         .key("prompt")
         .px(METRICS.row_px)
@@ -363,6 +460,15 @@ fn prompt_row(ui: &Ui, p: Paint) -> El {
                 .on_edit(|ui: &mut Ui| &mut ui.output.prompt)
                 .build(p.k)
                 .key("prompt-input"),
+        )
+        .child(
+            row()
+                .key("prompt-toggle")
+                .pt(6.0)
+                .gap(10.0)
+                .center_y()
+                .child(toggle)
+                .child(toggle_copy),
         )
 }
 
