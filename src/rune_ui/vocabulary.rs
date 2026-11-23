@@ -154,7 +154,7 @@ impl VocabularyEditor {
             // would leave two entries rewriting each other.
             if let Some(row) = self.rows.iter_mut().find(|row| {
                 !heard.is_empty()
-                    && !heard.eq_ignore_ascii_case(right)
+                    && heard != right
                     && row.term.text.trim().eq_ignore_ascii_case(heard)
             }) {
                 let old = row.term.text.trim().to_owned();
@@ -164,7 +164,9 @@ impl VocabularyEditor {
                     !sound.trim().eq_ignore_ascii_case(right)
                         && !sound.trim().eq_ignore_ascii_case(&old)
                 });
-                sounds.push(old);
+                if !old.eq_ignore_ascii_case(right) {
+                    sounds.push(old);
+                }
                 row.sounds_like.text = sounds.join(", ");
                 changed = true;
                 continue;
@@ -840,6 +842,22 @@ mod tests {
             [VocabularyEntry {
                 term: "composio".into(),
                 sounds_like: vec!["compose U".into()],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_case_only_correction_renames_the_term() {
+        let mut editor = VocabularyEditor::new(&[VocabularyEntry {
+            term: "zorbix".into(),
+            sounds_like: Vec::new(),
+        }]);
+        assert!(editor.merge_learned(&[("zorbix".into(), "Zorbix".into())]));
+        assert_eq!(
+            editor.project(),
+            [VocabularyEntry {
+                term: "Zorbix".into(),
+                sounds_like: Vec::new(),
             }]
         );
     }
