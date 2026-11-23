@@ -73,6 +73,7 @@ pub enum Pane {
     Modes,
     Snippets,
     Vocabulary,
+    PostTranscription,
     History,
     Meetings,
 }

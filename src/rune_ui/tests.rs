@@ -3838,7 +3838,11 @@ fn post_transcription_needs_a_model_before_its_switch_turns_on() {
     assert!(rt.find("post-transcription-toggle").is_some());
     tap(&mut rt, "post-transcription-toggle");
     assert!(
-        !rt.state.settings.dictation_processing.post_transcription.enabled,
+        !rt.state
+            .settings
+            .dictation_processing
+            .post_transcription
+            .enabled,
         "no model, no formatting"
     );
 
@@ -3851,7 +3855,13 @@ fn post_transcription_needs_a_model_before_its_switch_turns_on() {
     rt.invalidate();
     settle(&mut rt);
     tap(&mut rt, "post-transcription-toggle");
-    assert!(rt.state.settings.dictation_processing.post_transcription.enabled);
+    assert!(
+        rt.state
+            .settings
+            .dictation_processing
+            .post_transcription
+            .enabled
+    );
 }
 
 /// Labs › Transform typed text: Output's Typed text section and its

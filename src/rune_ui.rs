@@ -52,7 +52,6 @@ mod modes;
 mod onboarding;
 mod onboarding_kit;
 mod output;
-mod post_transcription;
 mod paste_access;
 #[cfg(all(hex_capture, target_os = "macos"))]
 pub(crate) mod paste_picker;
@@ -60,6 +59,7 @@ mod picker;
 mod platform;
 mod platform_settings;
 pub(crate) mod playground;
+mod post_transcription;
 mod practice;
 mod scenes;
 #[cfg(hex_capture)]
@@ -422,6 +422,7 @@ pub(crate) enum Destination {
     Modes,
     Snippets,
     Vocabulary,
+    PostTranscription,
     History,
 }
 
@@ -436,6 +437,7 @@ pub(crate) fn destination(pane: Option<crate::control::Pane>) -> Destination {
         Some(Named::Modes) => Destination::Modes,
         Some(Named::Snippets) => Destination::Snippets,
         Some(Named::Vocabulary) => Destination::Vocabulary,
+        Some(Named::PostTranscription) => Destination::PostTranscription,
         Some(Named::History) => Destination::History,
         Some(Named::Meetings) => Destination::Meetings(None),
     }
@@ -455,6 +457,7 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
         }
         Destination::Snippets => Pane::Snippets,
         Destination::Vocabulary => Pane::Vocabulary,
+        Destination::PostTranscription => Pane::PostTranscription,
         Destination::History => Pane::History,
     };
     ui.close_dialogs();
@@ -942,13 +945,8 @@ impl Ui {
                 .post_processing
                 .prompt,
         );
-        self.post_transcription.rebase_prompt(
-            &self
-                .settings
-                .dictation_processing
-                .post_transcription
-                .prompt,
-        );
+        self.post_transcription
+            .rebase_prompt(&self.settings.dictation_processing.post_transcription.prompt);
         self.snippets
             .rebase(&self.settings.dictation_processing.snippets);
         self.draft_since = None;
