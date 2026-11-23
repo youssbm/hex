@@ -3842,7 +3842,7 @@ fn post_transcription_needs_a_model_before_its_switch_turns_on() {
         "no model, no formatting"
     );
 
-    rt.state.models = super::models::fixture();
+    rt.state.models = super::models::Models::fixture();
     rt.state
         .settings
         .dictation_processing
