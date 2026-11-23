@@ -373,6 +373,11 @@ pub(super) fn close(ui: &mut Ui) {
     signin::close(ui);
 }
 
+/// Takes a finished OpenAI sign-in. True when the sheet changed.
+pub(super) fn poll(ui: &mut Ui) -> bool {
+    signin::poll(ui)
+}
+
 pub(super) fn cancel(ui: &mut Ui) {
     if ui.preparing.is_some() {
         ui.send(Request::CancelModel);
