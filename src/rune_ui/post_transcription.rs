@@ -81,7 +81,7 @@ pub(super) fn poll(ui: &mut Ui) -> bool {
 
 pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let content = page("post-transcription-content")
-        .child(intro(ui, p))
+        .child(intro(p))
         .child(connection(ui, p))
         .child(model(ui, p, layer))
         .child(formatting(ui, p));
@@ -89,7 +89,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
 }
 
 /// The pane's opening card: what runs, when, and what happens on failure.
-fn intro(ui: &Ui, p: Paint) -> El {
+fn intro(p: Paint) -> El {
     raised(p, "post-transcription-intro").child(
         col()
             .key("copy")
@@ -128,13 +128,13 @@ fn connection(ui: &Ui, p: Paint) -> El {
     } else if ui.models.is_not_running() {
         (
             tr("OpenCode is not running"),
-            tr("Start it, or sign in to the OpenCode CLI, then check again."),
+            tr("Start it, or sign in to the OpenCode CLI, then check again.").to_owned(),
             status_dot(p.warning()),
         )
     } else {
         (
             tr("OpenCode is not connected yet"),
-            tr("Sign in to the OpenCode CLI in the terminal, then check again."),
+            tr("Sign in to the OpenCode CLI in the terminal, then check again.").to_owned(),
             status_dot(p.warning()),
         )
     };
