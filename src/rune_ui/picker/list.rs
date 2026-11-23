@@ -316,6 +316,9 @@ fn model_row(ui: &Ui, p: Paint, entry: &Entry, language: &str) -> El {
     } else if let Some(delete) = delete_button(ui, p, entry, free) {
         actions = actions.child(delete);
     }
+    if def.id.is_cloud() && !entry.preparing() {
+        actions = actions.child(facts::signin_button(p, def));
+    }
     actions = actions.child(match &entry.state {
         State::InUse => facts::in_use(p),
         State::Preparing { .. } => row()

@@ -262,12 +262,16 @@ pub(super) fn body(ui: &Ui, p: Paint, entries: &[Entry], language: &str) -> El {
             _ if entry.def.available() => facts::choose_button(p, entry, primary == Some(index)),
             _ => el(),
         };
-        column = column.child(cell(
-            p,
-            "action",
-            ACTION,
-            row().key("slot").w_full().px(16.0).child(action),
-        ));
+        let mut slot = row().key("slot").w_full().px(16.0).center_y();
+        if entry.def.id.is_cloud() && !entry.preparing() {
+            slot = slot
+                .gap(8.0)
+                .child(action)
+                .child(facts::signin_button(p, entry.def));
+        } else {
+            slot = slot.child(action);
+        }
+        column = column.child(cell(p, "action", ACTION, slot));
         table = table.child(column);
     }
 

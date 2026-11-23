@@ -433,6 +433,17 @@ pub(super) fn choose_button(p: Paint, entry: &Entry, primary: bool) -> El {
     )
 }
 
+/// Sign in, or replace the account, for a cloud model beside its Use action.
+pub(super) fn signin_button(p: Paint, def: &'static ModelDefinition) -> El {
+    button(
+        p,
+        &format!("signin-{}", def.id.as_str()),
+        tr("Sign in"),
+        ButtonKind::Secondary,
+        move |ui: &mut Ui, _| picker::signin::open(ui, def.id),
+    )
+}
+
 /// The list's quieter Use or download action, at row size.
 pub(super) fn row_choose_button(p: Paint, entry: &Entry) -> El {
     let def = entry.def;

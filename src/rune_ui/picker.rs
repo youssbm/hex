@@ -13,6 +13,7 @@
 mod compare;
 mod facts;
 mod list;
+mod signin;
 
 use rune::{El, col, el, row, text};
 use rune_kit::{ControlSize, IconButton, IconButtonVariant};
@@ -109,6 +110,8 @@ pub(super) struct Picker {
     /// The card whose details are open (Parakeet Ultra's credit and
     /// published benchmarks).
     pub(super) details: super::model_details::DetailsState,
+    /// The Gradium key or OpenAI Codex sign-in sheet, when one is open.
+    pub(super) signin: signin::SignIn,
     /// The model in use when the picker opened, which Labs › Model in use
     /// first lists first; fixed until the picker closes.
     in_use_first: Option<TranscriptionModelId>,
@@ -140,6 +143,7 @@ pub(super) fn open(ui: &mut Ui) {
     ui.open = None;
     ui.picker.open = true;
     ui.picker.clear_deletion();
+    ui.picker.signin = signin::SignIn::default();
     // Models already on this computer: headers only, on a worker.
     super::found::scan(ui);
     ui.picker.sort = Sort::default();
@@ -366,6 +370,7 @@ pub(super) fn close(ui: &mut Ui) {
     ui.picker.open = false;
     ui.picker.in_use_first = None;
     ui.picker.clear_deletion();
+    signin::close(ui);
 }
 
 pub(super) fn cancel(ui: &mut Ui) {
@@ -452,11 +457,21 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
         return None;
     }
     let c = &p.k.c;
+    let signing_in = ui.picker.signin.model;
+    let dismiss: fn(&mut Ui) = if signing_in.is_some() {
+        signin::close
+    } else {
+        close
+    };
     let language = ui.settings.transcription.language.clone();
     let view = ui.picker.view;
-    let inset = match view {
-        View::Compare => 24.0,
-        View::All => 16.0,
+    let inset = if signing_in.is_some() {
+        24.0
+    } else {
+        match view {
+            View::Compare => 24.0,
+            View::All => 16.0,
+        }
     };
     let transcription = ui.view.as_ref().map(|view| &view.transcription);
     let errors = [
@@ -494,10 +509,13 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
         .pr(12.0)
         .gap(8.0)
         .center_y();
-    let title = match view {
-        View::Compare => facts::title(&language),
-        View::All => tr("All speech models").to_owned(),
-    };
+    let title = signing_in
+        .map(signin::title)
+        .map(str::to_owned)
+        .unwrap_or_else(|| match view {
+            View::Compare => facts::title(&language),
+            View::All => tr("All speech models").to_owned(),
+        });
     let heading = |title: &str| {
         text(title.to_owned())
             .key("title")
@@ -507,55 +525,72 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
             .color(p.text())
             .grow(1.0)
     };
-    let body = match view {
-        View::Compare => {
-            let entries = facts::entries(
-                ui,
-                &language,
-                &transcription_models::picker_models(&language),
-            );
-            header = header.pl(24.0).child(heading(&title));
-            compare::body(ui, p, &entries, &language)
-        }
-        View::All => {
-            let shown = shown_models(ui, &language);
-            let entries = facts::entries(ui, &language, &shown);
-            header = header
-                .pl(12.0)
-                .child(
-                    IconButton::new(&rune_theme_opencode::icons::CHEVRON_RIGHT)
-                        .variant(IconButtonVariant::Ghost)
-                        .control_size(ControlSize::Regular)
-                        .label(tr("Back"))
-                        .on_press(|ui: &mut Ui| show(ui, View::Compare))
-                        .build(p.k)
-                        .key("picker-back")
-                        .rotate(std::f32::consts::PI),
-                )
-                .child(heading(&title));
-            // Labs › Use model files where they are.
-            if let Some(in_place) = super::model_import::in_place_button(ui, p) {
-                header = header.child(in_place);
+    let body = if let Some(model) = signing_in {
+        header = header
+            .pl(12.0)
+            .child(
+                IconButton::new(&rune_theme_opencode::icons::CHEVRON_RIGHT)
+                    .variant(IconButtonVariant::Ghost)
+                    .control_size(ControlSize::Regular)
+                    .label(tr("Back"))
+                    .on_press(|ui: &mut Ui| signin::close(ui))
+                    .build(p.k)
+                    .key("signin-back")
+                    .rotate(std::f32::consts::PI),
+            )
+            .child(heading(&title));
+        signin::body(ui, p, model)
+    } else {
+        match view {
+            View::Compare => {
+                let entries = facts::entries(
+                    ui,
+                    &language,
+                    &transcription_models::picker_models(&language),
+                );
+                header = header.pl(24.0).child(heading(&title));
+                compare::body(ui, p, &entries, &language)
             }
-            header = header.child(super::model_import::add_button(ui, p));
-            let mut all = col().key("all");
-            if sort_filter_on(ui) {
-                all = all.child(sort_filter_row(ui, p, &language));
+            View::All => {
+                let shown = shown_models(ui, &language);
+                let entries = facts::entries(ui, &language, &shown);
+                header = header
+                    .pl(12.0)
+                    .child(
+                        IconButton::new(&rune_theme_opencode::icons::CHEVRON_RIGHT)
+                            .variant(IconButtonVariant::Ghost)
+                            .control_size(ControlSize::Regular)
+                            .label(tr("Back"))
+                            .on_press(|ui: &mut Ui| show(ui, View::Compare))
+                            .build(p.k)
+                            .key("picker-back")
+                            .rotate(std::f32::consts::PI),
+                    )
+                    .child(heading(&title));
+                // Labs › Use model files where they are.
+                if let Some(in_place) = super::model_import::in_place_button(ui, p) {
+                    header = header.child(in_place);
+                }
+                header = header.child(super::model_import::add_button(ui, p));
+                let mut all = col().key("all");
+                if sort_filter_on(ui) {
+                    all = all.child(sort_filter_row(ui, p, &language));
+                }
+                if downloaded_on(ui) {
+                    all = all.child(downloaded_row(ui, p, &language));
+                }
+                if (sort_filter_on(ui) || downloaded_on(ui))
+                    && let Some(note) = hidden_note(ui, p, &shown, &language)
+                {
+                    all = all.child(note);
+                }
+                all.child(list::body(ui, p, &entries, &language))
             }
-            if downloaded_on(ui) {
-                all = all.child(downloaded_row(ui, p, &language));
-            }
-            if (sort_filter_on(ui) || downloaded_on(ui))
-                && let Some(note) = hidden_note(ui, p, &shown, &language)
-            {
-                all = all.child(note);
-            }
-            all.child(list::body(ui, p, &entries, &language))
         }
     };
     let header = header.child(close_button);
     let mut content = col().key("picker-content");
-    if errors.iter().any(|(_, _, detail)| detail.is_some()) {
+    if signing_in.is_none() && errors.iter().any(|(_, _, detail)| detail.is_some()) {
         let mut panels = col().key("errors").gap(8.0).px(inset).pb(8.0);
         for (key, title, detail) in errors {
             if let Some(detail) = detail {
@@ -569,7 +604,11 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
         .key("transcription-picker")
         .role("dialog")
         .label(title)
-        .w(PANEL_WIDTH)
+        .w(if signing_in.is_some() {
+            signin::WIDTH
+        } else {
+            PANEL_WIDTH
+        })
         .radius(p.k.radius.xl)
         .fill(c.bg_base)
         .border(p.hair, c.border_weak)
@@ -580,11 +619,17 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
         .on_press(|_: &mut Ui| {})
         .child(header);
     // The comparison fits; the list scrolls inside the window's height.
-    panel = match view {
-        View::Compare => panel.child(content),
-        View::All => panel
-            .h(PANEL_HEIGHT)
-            .child(super::scroll_body(p.k, "model-scroll", content)),
+    panel = if signing_in.is_some() {
+        panel.child(content)
+    } else {
+        match view {
+            View::Compare => panel.child(content),
+            View::All => {
+                panel
+                    .h(PANEL_HEIGHT)
+                    .child(super::scroll_body(p.k, "model-scroll", content))
+            }
+        }
     };
     for shadow in &p.k.elevation.overlay {
         panel = panel.box_shadow(*shadow);
@@ -599,14 +644,14 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
     Some([
         layer("picker-scrim")
             .fill(c.scrim)
-            .on_press(close)
+            .on_press(dismiss)
             .transition(modal_scrim_transition(p)),
         layer("picker-layer")
             .center()
             .transition(modal_transition(p))
             // Keys stay inside, Escape or a press outside closes, and focus
             // returns to the control that opened it.
-            .child(panel.modal(true, close)),
+            .child(panel.modal(true, dismiss)),
     ])
 }
 

@@ -179,24 +179,281 @@ fn credential(config: &Config) -> Result<String> {
     Ok(token)
 }
 
+/// The OAuth token endpoint Codex itself refreshes against.
+const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+/// Codex's public PKCE client identifier. It is not a secret.
+const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const REFRESH_SCOPE: &str = "openid profile email";
+const AUTH_MAX_BYTES: u64 = 1024 * 1024;
+
+/// What a Sign in press found.
+#[derive(Clone, Debug)]
+pub(crate) enum SignIn {
+    /// The `api_key` backend, with a saved or environment key.
+    ApiKey,
+    /// The Codex access token still has life left.
+    AlreadySignedIn { expires_in: Option<Duration> },
+    /// The Codex access token was refreshed and saved.
+    Refreshed { expires_in: Option<Duration> },
+}
+
+fn config_path() -> Option<std::path::PathBuf> {
+    crate::app_paths::support_dir()
+        .ok()
+        .map(|dir| dir.join("openai-stt.json"))
+}
+
+/// Signs in to the selected OpenAI backend. The Codex session is refreshed
+/// from its auth file with the same grant Codex uses; an API-key backend only
+/// checks that a key is saved. A missing `openai-stt.json` is written only
+/// after the sign-in succeeds, so a failed attempt does not switch dictation
+/// to a cloud model that cannot answer.
+pub(crate) fn sign_in() -> Result<SignIn> {
+    let stored = config_path().and_then(|path| std::fs::read_to_string(path).ok());
+    let parsed = stored
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Config>(text).ok());
+    let config = parsed.clone().unwrap_or_else(|| Config {
+        backend: "codex_session".into(),
+        model: Some("gpt-4o-mini-transcribe".into()),
+        ..Config::default()
+    });
+    let backend = config.backend.trim().to_ascii_lowercase();
+    let result = if backend == "api_key" {
+        let key = config
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_owned)
+            .or_else(|| env("OPENAI_API_KEY"));
+        if key.is_none() {
+            return Err(eyre!(
+                "no OpenAI API key is saved; save one or use the Codex session"
+            ));
+        }
+        SignIn::ApiKey
+    } else if backend == "codex_session" {
+        sign_in_codex(&config)?
+    } else {
+        return Err(eyre!(
+            "unknown OpenAI STT backend {:?} (use api_key or codex_session)",
+            config.backend
+        ));
+    };
+    if parsed.is_none() && env("OPENAI_API_KEY").is_none() {
+        save_config(&config)?;
+    }
+    Ok(result)
+}
+
+fn sign_in_codex(config: &Config) -> Result<SignIn> {
+    let path = codex_auth_path(config)?;
+    let text = std::fs::read_to_string(&path).map_err(|_| {
+        eyre!(
+            "no Codex session was found at {}; run `codex login` on this computer, then try again",
+            path.display()
+        )
+    })?;
+    let mut root: serde_json::Value =
+        serde_json::from_str(&text).wrap_err("the Codex auth file is not valid JSON")?;
+    let access = root
+        .pointer("/tokens/access_token")
+        .and_then(|token| token.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    if !access.is_empty() && !jwt_expired(&access) {
+        return Ok(SignIn::AlreadySignedIn {
+            expires_in: jwt_expiry(&access).map(remaining),
+        });
+    }
+    let refresh = root
+        .pointer("/tokens/refresh_token")
+        .and_then(|token| token.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    if refresh.is_empty() {
+        return Err(eyre!(
+            "the Codex session has no refresh token; run `codex login` on this computer, then try again"
+        ));
+    }
+    refresh_codex(&path, &mut root, &refresh)?;
+    let expires_in = root
+        .pointer("/tokens/access_token")
+        .and_then(|token| token.as_str())
+        .and_then(jwt_expiry)
+        .map(remaining);
+    Ok(SignIn::Refreshed { expires_in })
+}
+
+fn save_config(config: &Config) -> Result<()> {
+    let path = config_path().ok_or_else(|| eyre!("the settings folder is unavailable"))?;
+    let mut saved = serde_json::json!({ "backend": &config.backend });
+    if let Some(model) = &config.model {
+        saved["model"] = serde_json::Value::String(model.clone());
+    }
+    if let Some(language) = &config.language {
+        saved["language"] = serde_json::Value::String(language.clone());
+    }
+    let text =
+        serde_json::to_string_pretty(&saved).wrap_err("could not write the OpenAI settings")?;
+    write_atomic(&path, &text)
+}
+
+fn refresh_codex(
+    path: &std::path::Path,
+    root: &mut serde_json::Value,
+    refresh_token: &str,
+) -> Result<()> {
+    let body = serde_json::json!({
+        "client_id": CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "scope": REFRESH_SCOPE,
+    })
+    .to_string();
+    let agent = crate::net::agent(TOKEN_URL, |config| {
+        config
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(30)))
+    });
+    let request = ureq::http::Request::builder()
+        .method("POST")
+        .uri(TOKEN_URL)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(body.into_bytes())
+        .map_err(|error| eyre!("could not build the Codex refresh request: {error}"))?;
+    let mut response = agent.run(request).map_err(|error| {
+        eyre!(
+            "could not reach OpenAI to refresh the Codex token: {}",
+            crate::net::reason(&error)
+        )
+    })?;
+    let status = response.status();
+    let body = response
+        .body_mut()
+        .with_config()
+        .limit(AUTH_MAX_BYTES)
+        .read_to_vec()
+        .wrap_err("could not read OpenAI's refresh answer")?;
+    if !status.is_success() {
+        let advice = if status.as_u16() == 401 {
+            "Run `codex login` on this computer, then try again. Nothing was changed."
+        } else {
+            "Nothing was changed."
+        };
+        return Err(eyre!(
+            "Codex refresh failed: HTTP {} ({}). {advice}",
+            status.as_u16(),
+            refresh_error_code(&body)
+        ));
+    }
+    let data: serde_json::Value =
+        serde_json::from_slice(&body).wrap_err("OpenAI's refresh answer was not JSON")?;
+    if data
+        .get("access_token")
+        .and_then(|token| token.as_str())
+        .is_none_or(|token| token.is_empty())
+    {
+        return Err(eyre!(
+            "OpenAI's refresh answer had no access token; nothing was changed"
+        ));
+    }
+    let backup = path.with_file_name(format!("auth.json.bak-refresh-{}", epoch_seconds()));
+    let _ = std::fs::copy(path, &backup);
+    let tokens = root
+        .get_mut("tokens")
+        .and_then(|tokens| tokens.as_object_mut())
+        .ok_or_else(|| eyre!("the Codex auth file has no tokens object"))?;
+    for key in ["id_token", "access_token", "refresh_token"] {
+        if let Some(value) = data.get(key).and_then(|value| value.as_str()) {
+            tokens.insert(key.to_owned(), serde_json::Value::String(value.to_owned()));
+        }
+    }
+    root["last_refresh"] = serde_json::Value::String(iso8601(epoch_seconds()));
+    let text =
+        serde_json::to_string_pretty(root).wrap_err("could not write the Codex auth file")?;
+    write_atomic(path, &text)?;
+    tracing::info!("refreshed the Codex access token");
+    Ok(())
+}
+
+fn refresh_error_code(body: &[u8]) -> String {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return "unknown".into();
+    };
+    value
+        .pointer("/error/code")
+        .or_else(|| value.pointer("/error/error"))
+        .or_else(|| value.get("code"))
+        .or_else(|| value.get("error"))
+        .and_then(|code| code.as_str())
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+fn write_atomic(path: &std::path::Path, text: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).wrap_err("could not create the settings folder")?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, text).wrap_err("could not write the temporary file")?;
+    std::fs::rename(&temporary, path).wrap_err("could not replace the settings file")?;
+    Ok(())
+}
+
+fn epoch_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|now| now.as_secs())
+        .unwrap_or(0)
+}
+
+fn remaining(exp: u64) -> Duration {
+    Duration::from_secs(exp.saturating_sub(epoch_seconds()))
+}
+
+/// `2026-11-24T00:00:00Z`, for the auth file's `last_refresh`.
+fn iso8601(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let rest = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3_600,
+        (rest % 3_600) / 60,
+        rest % 60
+    )
+}
+
+/// Howard Hinnant's civil-from-days, so `last_refresh` needs no date crate.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    (year + i64::from(month <= 2), month as u32, day as u32)
+}
+
 /// Whether a JWT-shaped token's `exp` is in the past. A token Hex cannot read
 /// is left to the server to judge.
 fn jwt_expired(token: &str) -> bool {
-    let Some(payload) = token.split('.').nth(1) else {
-        return false;
-    };
-    let Some(bytes) = base64url(payload) else {
-        return false;
-    };
-    let Ok(claims) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return false;
-    };
-    let Some(exp) = claims.get("exp").and_then(|exp| exp.as_u64()) else {
-        return false;
-    };
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .is_ok_and(|now| now.as_secs() >= exp)
+    jwt_expiry(token).is_some_and(|exp| epoch_seconds() >= exp)
+}
+
+fn jwt_expiry(token: &str) -> Option<u64> {
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64url(payload)?;
+    let claims = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+    claims.get("exp")?.as_u64()
 }
 
 fn base64url(input: &str) -> Option<Vec<u8>> {
@@ -608,5 +865,40 @@ mod tests {
             ),
             Some("fr".into())
         );
+    }
+
+    #[test]
+    fn refresh_dates_are_iso_utc() {
+        assert_eq!(iso8601(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso8601(1_700_000_000), "2023-11-14T22:13:20Z");
+    }
+
+    #[test]
+    fn a_refresh_error_names_its_code() {
+        assert_eq!(
+            refresh_error_code(br#"{"error":{"code":"refresh_token_reused"}}"#),
+            "refresh_token_reused"
+        );
+        assert_eq!(
+            refresh_error_code(br#"{"error":"refresh_token_expired"}"#),
+            "refresh_token_expired"
+        );
+        assert_eq!(refresh_error_code(b"not json"), "unknown");
+    }
+
+    #[test]
+    fn the_config_is_written_atomically() {
+        let directory =
+            std::env::temp_dir().join(format!("hex-openai-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("openai-stt.json");
+        write_atomic(&path, r#"{"backend":"codex_session"}"#).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"backend":"codex_session"}"#
+        );
+        assert!(!path.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }

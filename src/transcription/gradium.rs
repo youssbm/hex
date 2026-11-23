@@ -75,6 +75,66 @@ pub(crate) fn active() -> Option<Config> {
     serde_json::from_str(&text).ok()
 }
 
+/// Where the key is saved: beside `settings.json`.
+fn config_path() -> Option<std::path::PathBuf> {
+    crate::app_paths::support_dir()
+        .ok()
+        .map(|dir| dir.join("gradium.json"))
+}
+
+/// The last four characters of the configured key, for a status line. Never
+/// enough of the key to use it.
+pub(crate) fn key_hint() -> Option<String> {
+    let key = active()?.api_key;
+    let key = key.trim();
+    (!key.is_empty()).then(|| key_hint_of(key))
+}
+
+/// Saves `key` into `gradium.json`, keeping the language, model, boost,
+/// learning switch, and corrections already there, so another computer only
+/// has to paste its own key.
+pub(crate) fn save_api_key(key: &str) -> Result<()> {
+    let path = config_path().ok_or_else(|| eyre!("the settings folder is unavailable"))?;
+    save_api_key_at(&path, key)
+}
+
+fn save_api_key_at(path: &std::path::Path, key: &str) -> Result<()> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(eyre!("paste the API key from your Gradium account"));
+    }
+    if key.chars().any(char::is_whitespace) {
+        return Err(eyre!("the API key cannot contain spaces"));
+    }
+    if !key.starts_with("gsk_") {
+        return Err(eyre!("Gradium API keys start with gsk_"));
+    }
+    if key.chars().count() < 20 {
+        return Err(eyre!("that key looks too short"));
+    }
+    let mut root: serde_json::Value = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let object = root
+        .as_object_mut()
+        .ok_or_else(|| eyre!("gradium.json is not a JSON object"))?;
+    object.insert("api_key".into(), serde_json::Value::String(key.to_owned()));
+    let text =
+        serde_json::to_string_pretty(&root).wrap_err("could not write the Gradium settings")?;
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, text)
+        .and_then(|()| std::fs::rename(&temporary, path))
+        .wrap_err("could not save gradium.json")?;
+    tracing::info!(hint = key_hint_of(key), "saved the Gradium API key");
+    Ok(())
+}
+
+fn key_hint_of(key: &str) -> String {
+    let count = key.chars().count();
+    key.chars().skip(count.saturating_sub(4)).collect()
+}
+
 /// Whether to learn a new correction and watch an edited field. The app-wide
 /// switch and the configured file both have to allow it.
 pub(crate) fn learning_enabled() -> bool {
@@ -296,5 +356,56 @@ mod tests {
         assert_eq!(language(&config, "en"), "en");
         assert_eq!(language(&config, "pt-BR"), "pt");
         assert_eq!(language(&config, "ja"), "any");
+    }
+}
+
+#[cfg(test)]
+mod signin_tests {
+    use super::*;
+
+    fn directory(name: &str) -> std::path::PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("hex-gradium-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn saving_a_key_keeps_the_account_settings() {
+        let directory = directory("key");
+        let path = directory.join("gradium.json");
+        std::fs::write(
+            &path,
+            r#"{"api_key":"gsk_old000000000000","language":"fr","model":"default","boost":5,"learn":false,"corrections":{"a":"b"}}"#,
+        )
+        .unwrap();
+        save_api_key_at(&path, "  gsk_new000000000000  ").unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["api_key"], "gsk_new000000000000");
+        assert_eq!(saved["language"], "fr");
+        assert_eq!(saved["model"], "default");
+        assert_eq!(saved["boost"], 5);
+        assert_eq!(saved["learn"], false);
+        assert_eq!(saved["corrections"]["a"], "b");
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn a_key_needs_the_gradium_prefix_and_no_spaces() {
+        let directory = directory("bad-key");
+        let path = directory.join("gradium.json");
+        assert!(save_api_key_at(&path, "not-a-key").is_err());
+        assert!(save_api_key_at(&path, "gsk_has spaces in it").is_err());
+        assert!(save_api_key_at(&path, "gsk_short").is_err());
+        assert!(!path.exists());
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn the_hint_is_the_last_four_characters() {
+        assert_eq!(key_hint_of("gsk_abcdefgh1234"), "1234");
+        assert_eq!(key_hint_of("abc"), "abc");
     }
 }
