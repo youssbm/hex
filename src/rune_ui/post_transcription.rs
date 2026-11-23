@@ -160,7 +160,10 @@ fn connection(ui: &Ui, p: Paint) -> El {
             "post-transcription-check",
             tr("Check again"),
             ButtonKind::Secondary,
-            |ui: &mut Ui, _: &mut Tx| ui.models.reload(),
+            |ui: &mut Ui, _: &mut Tx| {
+                ui.post_transcription.reloaded = false;
+                ui.models.reload();
+            },
         ))
         .child(button(
             p,
@@ -170,6 +173,8 @@ fn connection(ui: &Ui, p: Paint) -> El {
             |ui: &mut Ui, _: &mut Tx| {
                 if let Err(error) = open_auth_terminal() {
                     ui.error = Some(error);
+                } else {
+                    ui.post_transcription.reloaded = false;
                 }
             },
         ));
