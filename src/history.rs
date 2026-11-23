@@ -956,6 +956,11 @@ impl History {
         self.search_at(query).1
     }
 
+    /// How many entries the store holds now, for a read-only summary.
+    pub fn len(&self) -> usize {
+        self.synced().entries.len()
+    }
+
     /// The store's revision ([`HistoryStore::revision`]), after picking up
     /// another process's write.
     pub fn revision(&self) -> u64 {

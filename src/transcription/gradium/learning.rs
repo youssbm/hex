@@ -33,6 +33,10 @@ pub(crate) struct Learned {
     /// This ranks the boost list by use, including terms added by hand.
     #[serde(default, skip_serializing_if = "is_empty_usage")]
     pub usage: HashMap<String, u32>,
+    /// Corrections already imported into the Vocabulary pane, kept so the
+    /// Learning card still has a history and a most-corrected word.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<Correction>,
 }
 
 fn is_empty_usage(usage: &HashMap<String, u32>) -> bool {
@@ -103,16 +107,24 @@ impl Learned {
         let mut learned = Self::load();
         let before = learned.corrections.len();
         let terms_before = learned.terms.len();
+        let mut moved = Vec::new();
         learned.corrections.retain(|correction| {
-            !pairs
+            let keep = !pairs
                 .iter()
-                .any(|(heard, right)| correction.heard == *heard && correction.right == *right)
+                .any(|(heard, right)| correction.heard == *heard && correction.right == *right);
+            if !keep {
+                moved.push(correction.clone());
+            }
+            keep
         });
         learned.terms.retain(|term| {
             !pairs
                 .iter()
                 .any(|(_, right)| term.term.trim().eq_ignore_ascii_case(right.trim()))
         });
+        for correction in moved {
+            learned.remember_history(correction);
+        }
         if learned.corrections.len() != before || learned.terms.len() != terms_before {
             learned.save();
         }
@@ -250,6 +262,22 @@ impl Learned {
         *self.usage.entry(term).or_insert(0) += 1;
     }
 
+    /// Keeps an imported correction in the learning history. The Vocabulary
+    /// pane's stats survive the import because of this list.
+    fn remember_history(&mut self, correction: Correction) {
+        if let Some(existing) = self.history.iter_mut().find(|existing| {
+            existing.heard.eq_ignore_ascii_case(&correction.heard)
+                && existing.right == correction.right
+        }) {
+            existing.count = existing.count.saturating_add(correction.count);
+            return;
+        }
+        self.history.push(correction);
+        if self.history.len() > MAX_CORRECTIONS {
+            self.history.remove(0);
+        }
+    }
+
     fn learn(&mut self, heard: &str, right: &str) {
         let heard_key = heard.to_lowercase();
         if let Some(existing) = self
@@ -378,7 +406,7 @@ pub(crate) fn usage_counts() -> HashMap<String, u32> {
     for term in &learned.terms {
         counts.entry(term.term.to_lowercase()).or_insert(term.count);
     }
-    for correction in &learned.corrections {
+    for correction in learned.corrections.iter().chain(&learned.history) {
         counts
             .entry(correction.right.to_lowercase())
             .or_insert(correction.count);
@@ -401,11 +429,13 @@ impl Learned {
         let corrections = self
             .corrections
             .iter()
+            .chain(&self.history)
             .map(|correction| correction.count)
             .sum();
         let most_corrected = self
             .corrections
             .iter()
+            .chain(&self.history)
             .max_by_key(|correction| correction.count)
             .map(|correction| {
                 (
@@ -721,7 +751,9 @@ const COMMON_WORDS: &str = "the a an and or but if then than that this these tho
 
 fn is_common_word(word: &str) -> bool {
     let word = word.to_lowercase();
-    COMMON_WORDS.split_whitespace().any(|common| common == word)
+    COMMON_WORDS
+        .split_whitespace()
+        .any(|common| common == word.as_str())
 }
 
 /// Acronyms people type every day and do not need a personal dictionary for.
@@ -731,7 +763,7 @@ fn is_everyday_acronym(word: &str) -> bool {
     let word = word.to_lowercase();
     EVERYDAY_ACRONYMS
         .split_whitespace()
-        .any(|common| common == word)
+        .any(|common| common == word.as_str())
 }
 
 /// Records a correction the person made by hand. Returns whether the
@@ -1130,7 +1162,8 @@ mod tests {
                 },
             ],
             terms: Vec::new(),
-            usage: HashMap::new(),
+            usage: Default::default(),
+            history: Vec::new(),
         };
         let stats = learned.stats();
         assert_eq!(stats.corrections, 4);
