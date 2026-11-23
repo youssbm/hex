@@ -920,8 +920,11 @@ impl Ui {
             Service::Pending(_) => {}
         }
         self.error = None;
-        if candidate.vocabulary != submitted.vocabulary {
-            self.vocabulary.reload(&candidate.vocabulary);
+        if candidate.vocabulary != submitted.vocabulary
+            || candidate.vocabulary_starred != submitted.vocabulary_starred
+        {
+            self.vocabulary
+                .reload_with_stars(&candidate.vocabulary, &candidate.vocabulary_starred);
         }
         self.lab_store.rebase_phrase(
             &submitted.labs.voice_prompt_phrase,
@@ -969,6 +972,7 @@ impl Ui {
         self.output.project(&mut candidate);
         self.post_transcription.project(&mut candidate);
         candidate.vocabulary = self.vocabulary.project();
+        candidate.vocabulary_starred = self.vocabulary.project_starred();
         candidate.dictation_processing.snippets = self.snippets.project();
         self.lab_store.project_phrase(&mut candidate);
         self.lab_store.project_stop_phrase(&mut candidate);
@@ -1163,8 +1167,12 @@ impl Ui {
             if service.dictation_processing != self.settings.dictation_processing {
                 self.open = None;
             }
-            if !drafts.vocabulary && service.vocabulary != self.settings.vocabulary {
-                self.vocabulary.reload(&service.vocabulary);
+            if !drafts.vocabulary
+                && (service.vocabulary != self.settings.vocabulary
+                    || service.vocabulary_starred != self.settings.vocabulary_starred)
+            {
+                self.vocabulary
+                    .reload_with_stars(&service.vocabulary, &service.vocabulary_starred);
             }
             self.snippets.rebase(&service.dictation_processing.snippets);
             self.output.rebase_prompt(

@@ -36,10 +36,7 @@ static LATEST: AtomicU64 = AtomicU64::new(0);
 /// Starts watching `window` for an edit of `pasted`. Does nothing unless the
 /// shared dictionary's learning is on.
 pub(crate) fn watch(window: isize, pasted: String) {
-    let learning = crate::transcription::gradium::learning_enabled()
-        || (crate::transcription::openai_stt::active().is_some()
-            && !crate::transcription::gradium::learning_disabled());
-    if window == 0 || !learning {
+    if window == 0 || crate::transcription::gradium::learning_disabled() {
         return;
     }
     let id = LATEST.fetch_add(1, Ordering::AcqRel) + 1;
@@ -90,12 +87,23 @@ fn run(id: u64, window: isize, pasted: String) {
             // A word half deleted or half retyped is not a correction yet.
             continue;
         };
+        if !crate::transcription::gradium::learning_enabled() {
+            return;
+        }
         let mut learned = 0;
         for (heard, right) in pairs {
+            // Scope: only a word that was in the text this paste inserted can
+            // teach the vocabulary. An edit somewhere else in the same field
+            // is not evidence about the dictation.
             if !crate::transcription::gradium::learning::contains_phrase(&pasted, &heard) {
                 continue;
             }
-            if crate::transcription::gradium::learning::remember(&heard, &right) {
+            let Some(term) = crate::dictation::processor::classify_vocabulary_correction(
+                &heard, &right, &pasted,
+            ) else {
+                continue;
+            };
+            if crate::transcription::gradium::learning::remember(&heard, &term) {
                 learned += 1;
             }
         }

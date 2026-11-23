@@ -121,6 +121,12 @@ impl Again {
 }
 
 impl HistoryPane {
+    /// How many dictations the store holds, for the vocabulary pane's rough
+    /// edit rate. Zero when no store opened.
+    pub(super) fn total(&self) -> usize {
+        self.store.as_ref().map_or(0, History::len)
+    }
+
     /// The host's store; `None` when it could not open one.
     pub(super) fn shared(store: Option<History>) -> Self {
         Self {

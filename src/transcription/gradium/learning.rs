@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::dictation::text_replacements::{ReplacementSet, TextReplacement};
 use crate::dictation::vocabulary::VocabularyEntry;
 
 /// Most mishearings kept; oldest go first.
@@ -28,6 +29,14 @@ pub(crate) struct Learned {
     pub corrections: Vec<Correction>,
     #[serde(default)]
     pub terms: Vec<LearnedTerm>,
+    /// How often a term was recognized in a transcript, keyed lowercased.
+    /// This ranks the boost list by use, including terms added by hand.
+    #[serde(default, skip_serializing_if = "is_empty_usage")]
+    pub usage: HashMap<String, u32>,
+}
+
+fn is_empty_usage(usage: &HashMap<String, u32>) -> bool {
+    usage.is_empty()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -109,14 +118,27 @@ impl Learned {
         }
     }
 
-    /// Fixes a transcript with the vocabulary, the configured pairs, and the
-    /// pairs learned before. Returns the text, how many words changed, and
-    /// how many new pairs this clip taught.
+    /// [`Self::apply_with`] with learning on, for tests and callers that have
+    /// already checked the switch.
     pub(crate) fn apply(
         &mut self,
         raw: &str,
         entries: &[VocabularyEntry],
         configured: &[(String, String)],
+    ) -> (String, usize, usize) {
+        self.apply_with(raw, entries, configured, true)
+    }
+
+    /// Fixes a transcript with the vocabulary, the configured pairs, and the
+    /// pairs learned before. `learn_new` adds a fuzzy match to the learning
+    /// file so the next clip gets it right. Returns the text, how many words
+    /// changed, and how many new pairs this clip taught.
+    pub(crate) fn apply_with(
+        &mut self,
+        raw: &str,
+        entries: &[VocabularyEntry],
+        configured: &[(String, String)],
+        learn_new: bool,
     ) -> (String, usize, usize) {
         let mut exact: HashMap<String, String> = HashMap::new();
         for entry in entries {
@@ -149,6 +171,7 @@ impl Learned {
         let mut index = 0;
         let mut changed = 0;
         let mut learned = Vec::new();
+        let mut used = Vec::new();
 
         while index < spans.len() {
             let mut matched = None;
@@ -170,6 +193,7 @@ impl Learned {
             if let Some((phrase, end)) = matched {
                 out.push_str(&raw[cursor..spans[index].0]);
                 out.push_str(&phrase.right);
+                used.push(phrase.right.clone());
                 cursor = spans[end - 1].1;
                 index = end;
                 changed += 1;
@@ -180,10 +204,13 @@ impl Learned {
             out.push_str(&raw[cursor..start]);
             let word = &raw[start..end];
             let replacement = if let Some(term) = exact.get(&words[index]) {
+                used.push(term.clone());
                 (term.as_str() != word).then(|| term.clone())
-            } else if let Some(term) = fuzzy(word, entries) {
-                learned.push((word.to_owned(), term.clone()));
-                Some(term)
+            } else if learn_new {
+                fuzzy(word, entries).inspect(|term| {
+                    used.push(term.clone());
+                    learned.push((word.to_owned(), term.clone()));
+                })
             } else {
                 None
             };
@@ -199,13 +226,28 @@ impl Learned {
         }
         out.push_str(&raw[cursor..]);
 
-        for (heard, right) in &learned {
-            self.learn(heard, right);
+        if learn_new {
+            for (heard, right) in &learned {
+                self.learn(heard, right);
+            }
         }
-        if !learned.is_empty() {
+        for term in &used {
+            self.note_use(term);
+        }
+        if (learn_new && !learned.is_empty()) || !used.is_empty() {
             self.save();
         }
         (out, changed, learned.len())
+    }
+
+    /// Counts one recognition of `term`, so the boost list can put the terms
+    /// a person actually says first. Case does not matter.
+    fn note_use(&mut self, term: &str) {
+        let term = term.trim().to_lowercase();
+        if term.is_empty() {
+            return;
+        }
+        *self.usage.entry(term).or_insert(0) += 1;
     }
 
     fn learn(&mut self, heard: &str, right: &str) {
@@ -326,11 +368,64 @@ fn push_keyword(words: &mut Vec<String>, seen: &mut HashSet<String>, term: &str)
     }
 }
 
+/// How often each right spelling has been seen, for ranking the boost list.
+/// Learned terms and corrections both count; a term the person never had to
+/// correct has no entry and keeps its saved position.
+pub(crate) fn usage_counts() -> HashMap<String, u32> {
+    let learned = Learned::load();
+    let mut counts = learned.usage.clone();
+    // Files written before usage existed still have the learning counts.
+    for term in &learned.terms {
+        counts.entry(term.term.to_lowercase()).or_insert(term.count);
+    }
+    for correction in &learned.corrections {
+        counts
+            .entry(correction.right.to_lowercase())
+            .or_insert(correction.count);
+    }
+    counts
+}
+
+/// What the Vocabulary pane shows about the learning loop.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Stats {
+    /// How many hand corrections the learning file remembers.
+    pub corrections: u32,
+    /// The correction heard most often: heard, right, and its count.
+    pub most_corrected: Option<(String, String, u32)>,
+}
+
+impl Learned {
+    /// This learning file as the Vocabulary pane summarizes it.
+    pub(crate) fn stats(&self) -> Stats {
+        let corrections = self
+            .corrections
+            .iter()
+            .map(|correction| correction.count)
+            .sum();
+        let most_corrected = self
+            .corrections
+            .iter()
+            .max_by_key(|correction| correction.count)
+            .map(|correction| {
+                (
+                    correction.heard.clone(),
+                    correction.right.clone(),
+                    correction.count,
+                )
+            });
+        Stats {
+            corrections,
+            most_corrected,
+        }
+    }
+}
+
 /// Adds the learned terms and mishearings to a vocabulary list, so Parakeet's
 /// own bias hears with everything Gradium learned. A learned correction's
 /// heard spelling becomes a "sounds like" of its right term.
 pub(crate) fn augment(entries: &mut Vec<VocabularyEntry>) {
-    if crate::transcription::gradium::learning_disabled() {
+    if !crate::dictation::vocabulary::enabled() {
         return;
     }
     let learned = Learned::load();
@@ -389,12 +484,17 @@ fn add_term(entries: &mut Vec<VocabularyEntry>, term: &str, sounds_like: &[Strin
 /// through either engine fixes the other. Returns the text unchanged when
 /// nothing matches.
 pub(crate) fn correct_with(text: &str, configured: &[(String, String)]) -> String {
-    if text.trim().is_empty() || crate::transcription::gradium::learning_disabled() {
+    if text.trim().is_empty() || !crate::dictation::vocabulary::enabled() {
         return text.to_owned();
     }
     let entries = crate::dictation::vocabulary::transcription_entries();
     let mut learned = Learned::load();
-    let (text, corrected, learned) = learned.apply(text, &entries, configured);
+    let (text, corrected, learned) = learned.apply_with(
+        text,
+        &entries,
+        configured,
+        crate::dictation::vocabulary::learning_enabled(),
+    );
     if corrected > 0 || learned > 0 {
         tracing::info!(
             corrected,
@@ -403,6 +503,47 @@ pub(crate) fn correct_with(text: &str, configured: &[(String, String)]) -> Strin
         );
     }
     text
+}
+
+/// Applies the vocabulary and learned corrections to text a formatter has
+/// just rewritten. This is the deterministic half of the post-transcription
+/// pass: the model handles style, and these whole-word rules put exact
+/// spellings back after it, so a formatter cannot undo a learned name.
+pub(crate) fn enforce(text: &str) -> String {
+    if text.trim().is_empty() || !crate::dictation::vocabulary::enabled() {
+        return text.to_owned();
+    }
+    enforce_with(
+        text,
+        &crate::dictation::vocabulary::transcription_entries(),
+        &Learned::load().corrections,
+    )
+}
+
+fn enforce_with(text: &str, entries: &[VocabularyEntry], corrections: &[Correction]) -> String {
+    let mut rules = Vec::new();
+    for entry in entries {
+        rules.push(TextReplacement {
+            matched_phrase: entry.term.clone(),
+            output: entry.term.clone(),
+        });
+        for spelling in &entry.sounds_like {
+            rules.push(TextReplacement {
+                matched_phrase: spelling.clone(),
+                output: entry.term.clone(),
+            });
+        }
+    }
+    for correction in corrections {
+        rules.push(TextReplacement {
+            matched_phrase: correction.heard.clone(),
+            output: correction.right.clone(),
+        });
+    }
+    if rules.is_empty() {
+        return text.to_owned();
+    }
+    ReplacementSet::new(&rules).replace(text)
 }
 
 /// A word and the text before it, so an edit that changes a separator (the
@@ -508,12 +649,102 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether a corrected spelling looks like a name, brand, or other term worth
+/// learning. This is the precision gate: a formatter may fix "teh" to "the"
+/// all day, and that never belongs in a vocabulary. Names, compounds, mixed
+/// case, acronyms, and email addresses pass; common words, everyday acronyms,
+/// paths, URLs, code, and numbers do not.
+pub(crate) fn looks_like_proper_noun(heard: &str, right: &str) -> bool {
+    let heard = heard.trim();
+    let right = right.trim();
+    if heard.is_empty() || right.is_empty() || right.chars().count() > MAX_TERM_CHARS {
+        return false;
+    }
+    if right.contains("://")
+        || right.to_lowercase().starts_with("www.")
+        || right.contains(&['/', '\\', '{', '}', '(', ')', '[', ']', '<', '>', ';', '='][..])
+    {
+        return false;
+    }
+    if right.contains('@') {
+        let mut parts = right.split('@');
+        let local = parts.next().unwrap_or_default();
+        let domain = parts.next().unwrap_or_default();
+        return !local.is_empty()
+            && domain.contains('.')
+            && !domain.starts_with('.')
+            && !domain.ends_with('.')
+            && parts.next().is_none();
+    }
+    if !right.chars().any(char::is_alphabetic) {
+        return false;
+    }
+    let words: Vec<&str> = right.split_whitespace().collect();
+    if words.is_empty() || words.len() > 4 {
+        return false;
+    }
+    if words.len() == 1 && is_common_word(words[0]) {
+        return false;
+    }
+    if words.iter().all(|word| is_everyday_acronym(word)) {
+        return false;
+    }
+    let known = crate::dictation::vocabulary::entries()
+        .iter()
+        .any(|entry| entry.term.eq_ignore_ascii_case(right));
+    known
+        || words.iter().any(|word| {
+            let mut chars = word.chars();
+            let first_upper = chars.next().is_some_and(char::is_uppercase);
+            let rest = chars.collect::<String>();
+            (first_upper && rest.chars().any(char::is_lowercase))
+                || word
+                    .chars()
+                    .filter(|character| character.is_uppercase())
+                    .count()
+                    >= 2
+                || word.chars().any(|character| character.is_ascii_digit())
+        })
+}
+
+/// Function words and the common work nouns people correct by accident. A
+/// capitalized "Sprint" at the start of a sentence still fails this, which is
+/// the point: a dictionary of ordinary words is noise.
+const COMMON_WORDS: &str = "the a an and or but if then than that this these those i you he she it we \
+    they me him her us them is are was were be been being am to of in on at for with from by as \
+    about not no yes so just also very really can could should would will may might must do does \
+    did have has had here there when where what who why how today tomorrow yesterday sprint \
+    roadmap deploy meeting project team email message call note draft invoice report update \
+    review launch plan task ticket issue bug feature product customer client company user data \
+    code app file page site link doc document text word line point thing stuff way time day week \
+    month year";
+
+fn is_common_word(word: &str) -> bool {
+    let word = word.to_lowercase();
+    COMMON_WORDS.split_whitespace().any(|common| common == word)
+}
+
+/// Acronyms people type every day and do not need a personal dictionary for.
+const EVERYDAY_ACRONYMS: &str = "pdf url http https html css json xml csv api asap btw fyi ok okay";
+
+fn is_everyday_acronym(word: &str) -> bool {
+    let word = word.to_lowercase();
+    EVERYDAY_ACRONYMS
+        .split_whitespace()
+        .any(|common| common == word)
+}
+
 /// Records a correction the person made by hand. Returns whether the
 /// dictionary changed; a repeat of a pair it already knows is not new.
 pub(crate) fn remember(heard: &str, right: &str) -> bool {
     let heard = heard.trim();
     let right = right.trim();
-    if heard.is_empty() || right.is_empty() || heard == right {
+    if heard.is_empty()
+        || right.is_empty()
+        || heard == right
+        || right.chars().count() > MAX_TERM_CHARS
+        || !crate::dictation::vocabulary::learning_enabled()
+    {
         return false;
     }
     let mut learned = Learned::load();
@@ -827,5 +1058,85 @@ mod tests {
         assert_eq!(distance_within("gradium", "gradum", 1), Some(1));
         assert_eq!(distance_within("gradium", "gradium", 1), Some(0));
         assert_eq!(distance_within("gradium", "grad", 1), None);
+    }
+
+    #[test]
+    fn the_local_gate_keeps_names_and_rejects_noise() {
+        assert!(looks_like_proper_noun("Gradiom", "Gradium"));
+        assert!(looks_like_proper_noun("github", "GitHub"));
+        assert!(looks_like_proper_noun("open code", "OpenCode"));
+        assert!(looks_like_proper_noun(
+            "Yusuf BM 2008 at gmail",
+            "youssefbm2008@gmail.com"
+        ));
+        assert!(!looks_like_proper_noun("teh", "the"));
+        assert!(!looks_like_proper_noun("sprint", "Sprint"));
+        assert!(!looks_like_proper_noun("a pie", "API"));
+        assert!(!looks_like_proper_noun("see", "https://example.com"));
+        assert!(!looks_like_proper_noun("file", "src/main.rs"));
+        assert!(!looks_like_proper_noun("two", "2"));
+    }
+
+    #[test]
+    fn learning_off_keeps_known_pairs_but_stops_fuzzy_learning() {
+        let entries = vec![entry("Gradium", &[])];
+        let mut learned = Learned::default();
+        learned.corrections.push(Correction {
+            heard: "gradum".into(),
+            right: "Gradium".into(),
+            count: 1,
+        });
+        let (text, changed, learned_pairs) =
+            learned.apply_with("gradum works", &entries, &[], false);
+        assert_eq!(text, "Gradium works");
+        assert_eq!(changed, 1);
+        assert_eq!(learned_pairs, 0);
+        assert_eq!(learned.corrections.len(), 1);
+
+        let (text, changed, learned_pairs) =
+            learned.apply_with("gradium works", &entries, &[], false);
+        assert_eq!(text, "Gradium works");
+        assert_eq!(changed, 1);
+        assert_eq!(learned_pairs, 0);
+    }
+
+    #[test]
+    fn enforcement_puts_vocabulary_back_after_a_formatter() {
+        let entries = vec![entry("GitHub", &["git hub"])];
+        let corrections = vec![Correction {
+            heard: "Gradiom".into(),
+            right: "Gradium".into(),
+            count: 1,
+        }];
+        assert_eq!(
+            enforce_with("push to git hub and Gradiom", &entries, &corrections),
+            "push to GitHub and Gradium"
+        );
+    }
+
+    #[test]
+    fn stats_summarize_the_most_corrected_word() {
+        let learned = Learned {
+            corrections: vec![
+                Correction {
+                    heard: "gradiom".into(),
+                    right: "Gradium".into(),
+                    count: 3,
+                },
+                Correction {
+                    heard: "opencode".into(),
+                    right: "OpenCode".into(),
+                    count: 1,
+                },
+            ],
+            terms: Vec::new(),
+            usage: HashMap::new(),
+        };
+        let stats = learned.stats();
+        assert_eq!(stats.corrections, 4);
+        assert_eq!(
+            stats.most_corrected,
+            Some(("gradiom".into(), "Gradium".into(), 3))
+        );
     }
 }

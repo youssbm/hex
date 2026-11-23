@@ -377,6 +377,16 @@ pub struct AppSettings {
         serialize_with = "serialize_saved"
     )]
     pub vocabulary: Vec<VocabularyEntry>,
+    /// Apply the vocabulary to dictation: recognition hints, corrections,
+    /// planning prompts, and search.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub vocabulary_enabled: bool,
+    /// Learn a corrected spelling from the field a dictation was pasted into.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub vocabulary_learning: bool,
+    /// Terms the person pinned to the front of the recognition list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocabulary_starred: Vec<String>,
     /// How readily transcription swaps heard words for a vocabulary term.
     pub vocabulary_boost: crate::dictation::vocabulary::VocabularyBoost,
     /// One-time settings changes already applied. A file that predates a
@@ -446,6 +456,16 @@ where
     serde_json::Value::deserialize(deserializer).map(Some)
 }
 
+/// Settings that predate a switch behave as if a new install had it on.
+fn default_true() -> bool {
+    true
+}
+
+/// True is the default, so only an explicit off is written to the file.
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -498,6 +518,9 @@ impl Default for AppSettings {
             indicator_position: IndicatorPosition::default(),
             updates: UpdateSettings::default(),
             vocabulary: Vec::new(),
+            vocabulary_enabled: true,
+            vocabulary_learning: true,
+            vocabulary_starred: Vec::new(),
             vocabulary_boost: crate::dictation::vocabulary::VocabularyBoost::default(),
             migrations: MIGRATIONS.iter().map(|id| id.to_string()).collect(),
             text_replacements: Vec::new(),
@@ -898,7 +921,13 @@ impl AppSettings {
             &self.dictation_processing,
             self.labs.voice_prompt,
         );
-        crate::dictation::vocabulary::apply(&self.vocabulary, self.vocabulary_boost);
+        crate::dictation::vocabulary::apply(
+            &self.vocabulary,
+            self.vocabulary_boost,
+            self.vocabulary_enabled,
+            self.vocabulary_learning,
+            &self.vocabulary_starred,
+        );
     }
 
     /// Mode activations saved while Finder showed filename extensions carry a

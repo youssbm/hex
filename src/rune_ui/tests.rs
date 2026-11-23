@@ -3864,6 +3864,22 @@ fn post_transcription_needs_a_model_before_its_switch_turns_on() {
     );
 }
 
+/// Vocabulary › the two master switches: use the list, and learn from edits.
+#[test]
+fn vocabulary_pane_switches_use_and_learning() {
+    let mut state = Ui::with(AppSettings::default(), Service::Fixture(Vec::new()));
+    state.pane = Pane::Vocabulary;
+    let mut rt = runtime_for(state, false, TALL_SIZE);
+    assert!(rt.find("vocabulary-enabled").is_some());
+    assert!(rt.find("vocabulary-learning").is_some());
+    assert!(rt.state.settings.vocabulary_enabled);
+    assert!(rt.state.settings.vocabulary_learning);
+    tap(&mut rt, "vocabulary-enabled");
+    assert!(!rt.state.settings.vocabulary_enabled);
+    tap(&mut rt, "vocabulary-learning");
+    assert!(!rt.state.settings.vocabulary_learning);
+}
+
 /// Labs › Transform typed text: Output's Typed text section and its
 /// recorder appear only with the lab on, and the recorder listens like the
 /// raw dictation shortcut's.

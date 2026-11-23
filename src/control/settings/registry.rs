@@ -258,6 +258,21 @@ pub(super) const KEYS: &[Key] = &[
         "Hex records these as you switch models",
     ),
     key(
+        "vocabulary_enabled",
+        Kind::Bool,
+        "Whether dictation, corrections, prompts, and search use the vocabulary",
+    ),
+    key(
+        "vocabulary_learning",
+        Kind::Bool,
+        "Whether a correction after a paste can add a word to the vocabulary",
+    ),
+    key(
+        "vocabulary_starred",
+        Kind::Json,
+        "Terms pinned to the front of the recognition list",
+    ),
+    key(
         "vocabulary_boost",
         Kind::Choice(&["off", "light", "normal", "strong"]),
         "How readily transcription swaps heard words for a vocabulary term",

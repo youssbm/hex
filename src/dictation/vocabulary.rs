@@ -6,9 +6,10 @@
 //! it as their context prompt through [`transcription_prompt`].
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::io::Read as _;
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
@@ -116,6 +117,12 @@ impl VocabularyBoost {
 
 static SAVED: OnceLock<RwLock<Vec<VocabularyEntry>>> = OnceLock::new();
 static BOOST: AtomicU8 = AtomicU8::new(VocabularyBoost::Normal as u8);
+/// Whether any part of Hex may read the vocabulary.
+static ENABLED: AtomicBool = AtomicBool::new(true);
+/// Whether a hand edit may add a new word to the vocabulary.
+static LEARNING: AtomicBool = AtomicBool::new(true);
+/// The lowercased terms the person pinned to the front of the boost list.
+static STARRED: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
 /// The focused app and page as last seen (macOS), whose mode's own terms a
 /// dictation hears with ahead of the shared list.
 static FOCUS: OnceLock<RwLock<Option<ContextSnapshot>>> = OnceLock::new();
@@ -167,12 +174,28 @@ pub(crate) fn for_capture<R>(terms: &[String], work: impl FnOnce() -> R) -> R {
     work()
 }
 
+/// Whether the vocabulary is on. Off leaves the terms saved but stops every
+/// reader: recognition hints, corrections, rewriting prompts, and search.
+pub(crate) fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
+/// Whether a hand edit may add a word. A vocabulary that is off cannot learn.
+pub(crate) fn learning_enabled() -> bool {
+    enabled() && LEARNING.load(Ordering::Relaxed)
+}
+
 /// The focused mode's own terms first, so the bias cap keeps them, then the
-/// shared list, then the terms this capture read from its window, each term
-/// once. Screen terms are lowest priority because they change with every
-/// window, and only a dictation hears them.
+/// shared list ranked by star and learned use, then the terms this capture
+/// read from its window, each term once. Screen terms are lowest priority
+/// because they change with every window, and only a dictation hears them.
 pub(crate) fn transcription_entries() -> Vec<VocabularyEntry> {
+    if !enabled() {
+        return Vec::new();
+    }
     let mut list = entries();
+    crate::transcription::gradium::learning::augment(&mut list);
+    sort_for_boost(&mut list);
     if DICTATING.with(Cell::get) {
         let focused = FOCUS
             .get_or_init(Default::default)
@@ -191,8 +214,32 @@ pub(crate) fn transcription_entries() -> Vec<VocabularyEntry> {
             list = merged(&list, &screen);
         }
     }
-    crate::transcription::gradium::learning::augment(&mut list);
     list
+}
+
+/// Puts starred terms first, then terms the learning file has seen used most
+/// often. A stable sort keeps the saved order for ties, so a person who never
+/// stars or corrects anything keeps exactly the list they wrote.
+fn sort_for_boost(list: &mut [VocabularyEntry]) {
+    let counts = crate::transcription::gradium::learning::usage_counts();
+    list.sort_by(|left, right| {
+        let left_starred = is_starred(&left.term);
+        let right_starred = is_starred(&right.term);
+        right_starred.cmp(&left_starred).then_with(|| {
+            let left_count = counts.get(&left.term.to_lowercase()).copied().unwrap_or(0);
+            let right_count = counts.get(&right.term.to_lowercase()).copied().unwrap_or(0);
+            right_count.cmp(&left_count)
+        })
+    });
+}
+
+/// Whether `term` is one of the starred terms, in any case.
+pub(crate) fn is_starred(term: &str) -> bool {
+    STARRED
+        .get_or_init(Default::default)
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .contains(&term.trim().to_lowercase())
 }
 
 /// Labs › Words on screen's terms as entries with no "sounds like"
@@ -226,8 +273,13 @@ pub fn terms() -> Vec<String> {
     entries().into_iter().map(|entry| entry.term).collect()
 }
 
-/// The saved entries, as last applied from settings.
+/// The saved entries while the vocabulary is on; empty while it is off, so
+/// every reader stops at one switch. The pane edits `settings.vocabulary`
+/// directly, so the saved list survives.
 pub fn entries() -> Vec<VocabularyEntry> {
+    if !enabled() {
+        return Vec::new();
+    }
     SAVED
         .get_or_init(Default::default)
         .read()
@@ -242,6 +294,9 @@ pub fn entries() -> Vec<VocabularyEntry> {
 /// the screen, and again before giving up its live stream.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn uses_terms() -> bool {
+    if !enabled() {
+        return false;
+    }
     let (_, selection) = crate::app_settings::transcription_selection();
     let definition = crate::transcription::models::definition(selection.model);
     terms_used(
@@ -357,6 +412,23 @@ pub(crate) fn prompt_for(entries: &[VocabularyEntry], max_chars: usize) -> Optio
     })
 }
 
+/// The vocabulary one post-transcription formatter prompt carries, in the
+/// ranked order and with the "sounds like" spellings it should replace.
+pub(crate) fn formatter_vocabulary(max_terms: usize) -> String {
+    if !enabled() {
+        return String::new();
+    }
+    transcription_entries()
+        .into_iter()
+        .take(max_terms)
+        .map(|entry| match entry.sounds_like.as_slice() {
+            [] => entry.term,
+            spellings => format!("{} (may be heard as {})", entry.term, spellings.join(", ")),
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// How many of the first terms fit `max_chars` joined by ", ".
 pub(crate) fn prompt_terms(entries: &[VocabularyEntry], max_chars: usize) -> usize {
     let mut chars = 0;
@@ -382,12 +454,31 @@ pub(crate) fn fold_hints(list: &mut Vec<VocabularyEntry>, hints: &str) -> bool {
 }
 
 /// Called by `AppSettings` whenever settings load or save.
-pub(crate) fn apply(entries: &[VocabularyEntry], boost: VocabularyBoost) {
+pub(crate) fn apply(
+    entries: &[VocabularyEntry],
+    boost: VocabularyBoost,
+    enabled: bool,
+    learning: bool,
+    starred: &[String],
+) {
     *SAVED
         .get_or_init(Default::default)
         .write()
         .unwrap_or_else(|error| error.into_inner()) = entries.to_vec();
     BOOST.store(boost as u8, Ordering::Relaxed);
+    ENABLED.store(enabled, Ordering::Relaxed);
+    LEARNING.store(learning, Ordering::Relaxed);
+    let mut stars = STARRED
+        .get_or_init(Default::default)
+        .write()
+        .unwrap_or_else(|error| error.into_inner());
+    stars.clear();
+    stars.extend(
+        starred
+            .iter()
+            .map(|term| term.trim().to_lowercase())
+            .filter(|term| !term.is_empty()),
+    );
 }
 
 /// The entries saved in `root/settings.json`, read without loading
@@ -599,7 +690,13 @@ mod tests {
 
     #[test]
     fn only_dictation_hears_with_the_focused_modes_terms() {
-        apply(&[entry("OpenCode", &[])], VocabularyBoost::Normal);
+        apply(
+            &[entry("OpenCode", &[])],
+            VocabularyBoost::Normal,
+            true,
+            true,
+            &[],
+        );
         assert_eq!(transcription_entries(), [entry("OpenCode", &[])]);
         let inside = for_dictation(|| {
             assert!(DICTATING.with(Cell::get));
@@ -611,7 +708,13 @@ mod tests {
 
     #[test]
     fn a_captures_screen_terms_come_last_and_leave_with_it() {
-        apply(&[entry("OpenCode", &[])], VocabularyBoost::Normal);
+        apply(
+            &[entry("OpenCode", &[])],
+            VocabularyBoost::Normal,
+            true,
+            true,
+            &[],
+        );
         let terms = vec!["opencode".to_string(), "Qdrant".to_string()];
         let inside = for_dictation(|| for_capture(&terms, transcription_entries));
         assert_eq!(inside, [entry("OpenCode", &[]), entry("Qdrant", &[])]);

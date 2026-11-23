@@ -258,14 +258,15 @@ pub(crate) fn transcribe(
         .filter(|model| !model.is_empty())
         .unwrap_or_else(|| default_model(&config.backend));
     let language = language(config, selection_language);
-    let learn = !crate::transcription::gradium::learning_disabled();
-    let mut learned = if learn {
+    let vocabulary_on = crate::dictation::vocabulary::enabled();
+    let learn_new = !crate::transcription::gradium::learning_disabled();
+    let mut learned = if vocabulary_on {
         crate::transcription::gradium::learning::Learned::load()
     } else {
         crate::transcription::gradium::learning::Learned::default()
     };
     let mut entries = crate::dictation::vocabulary::entries();
-    if learn {
+    if vocabulary_on {
         // A correction learned since the Vocabulary pane last imported is
         // still sent, so a fresh mishearing reaches the model right away.
         for correction in &learned.corrections {
@@ -342,8 +343,8 @@ pub(crate) fn transcribe(
     }
 
     let raw = parse(&body)?;
-    let (transcript, corrected, learned_pairs) = if learn {
-        learned.apply(&raw, &entries, configured)
+    let (transcript, corrected, learned_pairs) = if vocabulary_on {
+        learned.apply_with(&raw, &entries, configured, learn_new)
     } else {
         (raw, 0, 0)
     };

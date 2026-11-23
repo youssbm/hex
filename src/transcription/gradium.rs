@@ -75,15 +75,18 @@ pub(crate) fn active() -> Option<Config> {
     serde_json::from_str(&text).ok()
 }
 
-/// Whether to correct transcripts and watch an edited field for corrections.
+/// Whether to learn a new correction and watch an edited field. The app-wide
+/// switch and the configured file both have to allow it.
 pub(crate) fn learning_enabled() -> bool {
-    active().is_some_and(|config| config.learn.unwrap_or(true))
+    crate::dictation::vocabulary::learning_enabled()
+        && active().is_some_and(|config| config.learn.unwrap_or(true))
 }
 
-/// Whether the configured file explicitly turned corrections and learning
-/// off. A missing file leaves the shared dictionary usable by the local model.
+/// Whether either the app-wide switch or the configured file turned new
+/// learning off. Existing learned corrections still apply while it is off.
 pub(crate) fn learning_disabled() -> bool {
-    active().is_some_and(|config| !config.learn.unwrap_or(true))
+    !crate::dictation::vocabulary::learning_enabled()
+        || active().is_some_and(|config| !config.learn.unwrap_or(true))
 }
 
 /// Transcribes a complete 16 kHz mono clip. Returns an error, rather than an
@@ -94,14 +97,21 @@ pub(crate) fn transcribe(config: &Config, samples: &[f32], selection: &str) -> R
     let language = language(config, selection);
     let model = config.model.as_deref().unwrap_or("default");
     let boost = config.boost.unwrap_or(3).clamp(-6, 6);
-    let learn = config.learn.unwrap_or(true);
+    let vocabulary_on = crate::dictation::vocabulary::enabled();
+    let learn_new = vocabulary_on
+        && crate::dictation::vocabulary::learning_enabled()
+        && config.learn.unwrap_or(true);
     let configured: Vec<(String, String)> = config
         .corrections
         .iter()
         .map(|(heard, right)| (heard.clone(), right.clone()))
         .collect();
     let entries = crate::dictation::vocabulary::entries();
-    let mut learned = learning::Learned::load();
+    let mut learned = if vocabulary_on {
+        learning::Learned::load()
+    } else {
+        learning::Learned::default()
+    };
     let words = learning::keywords(&entries, &learned, &configured);
 
     // 10 frames (800 ms) of context is the realtime default; the REST
@@ -154,8 +164,8 @@ pub(crate) fn transcribe(config: &Config, samples: &[f32], selection: &str) -> R
     }
 
     let transcript = parse(&body)?;
-    let (transcript, corrected, learned_pairs) = if learn {
-        learned.apply(&transcript, &entries, &configured)
+    let (transcript, corrected, learned_pairs) = if vocabulary_on {
+        learned.apply_with(&transcript, &entries, &configured, learn_new)
     } else {
         (transcript, 0, 0)
     };

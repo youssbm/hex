@@ -72,12 +72,29 @@ pub(crate) fn plan(settings: &PostTranscriptionSettings) -> Option<Plan> {
 /// The full prompt: the person's instructions, the JSON contract, and the
 /// transcript inside its own delimiters.
 pub(crate) fn build_prompt(instructions: &str, transcript: &str) -> String {
+    build_prompt_with_vocabulary(instructions, transcript, "")
+}
+
+/// [`Self::build_prompt`] with the vocabulary the formatter should spell
+/// exactly. The list is bounded by the caller, because a formatter prompt
+/// pays for every term in latency and attention.
+pub(crate) fn build_prompt_with_vocabulary(
+    instructions: &str,
+    transcript: &str,
+    vocabulary: &str,
+) -> String {
     let transcript = transcript.replace("</transcript>", r"<\/transcript>");
+    let vocabulary = vocabulary.trim();
+    let vocabulary = if vocabulary.is_empty() {
+        String::new()
+    } else {
+        format!("Vocabulary (spell these exactly when the speaker means them): {vocabulary}\n\n")
+    };
     format!(
         "{instructions}\n\n\
          Return only one JSON object with exactly this shape, with no markdown fences and no other text:\n\
          {{\"text\": \"the formatted text\", \"changed\": true}}\n\n\
-         Raw transcript:\n\
+         {vocabulary}Raw transcript:\n\
          <transcript>\n{transcript}\n</transcript>"
     )
 }
@@ -104,7 +121,7 @@ pub(crate) fn parse_reply(reply: &str, original: &str) -> Option<String> {
 
 /// The JSON object in `reply`: the whole reply, a fenced object, or the first
 /// object found around prose a model added despite the prompt.
-fn json_object(reply: &str) -> Option<&str> {
+pub(crate) fn json_object(reply: &str) -> Option<&str> {
     let trimmed = reply.trim();
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         return Some(trimmed);
@@ -160,6 +177,19 @@ mod tests {
         assert!(prompt.contains("Keep it short."));
         assert!(prompt.contains(r#"{"text": "the formatted text", "changed": true}"#));
         assert!(prompt.contains("<transcript>\nhello dot world\n</transcript>"));
+    }
+
+    #[test]
+    fn the_vocabulary_rides_in_the_prompt_before_the_transcript() {
+        let prompt = build_prompt_with_vocabulary(
+            "Keep it short.",
+            "ship it to github",
+            "GitHub (may be heard as git hub)",
+        );
+        let vocabulary = prompt.find("Vocabulary (spell these exactly").unwrap();
+        let transcript = prompt.find("Raw transcript:").unwrap();
+        assert!(vocabulary < transcript);
+        assert!(prompt.contains("GitHub (may be heard as git hub)"));
     }
 
     #[test]

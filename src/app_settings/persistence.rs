@@ -167,7 +167,13 @@ impl AppSettings {
             }
         };
         crate::labs::apply(&settings.labs);
-        crate::dictation::vocabulary::apply(&settings.vocabulary, settings.vocabulary_boost);
+        crate::dictation::vocabulary::apply(
+            &settings.vocabulary,
+            settings.vocabulary_boost,
+            settings.vocabulary_enabled,
+            settings.vocabulary_learning,
+            &settings.vocabulary_starred,
+        );
         #[cfg(not(target_os = "macos"))]
         crate::transcription::local_transcriber::set_device(settings.transcription_device);
         Some(settings)

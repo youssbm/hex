@@ -1,8 +1,10 @@
 //! Vocabulary: a sidebar pane with one row per term and its "sounds like"
 //! spellings, edited in place and saved when typing pauses, like a mode's
 //! corrections. The same editor still backs the sheet the playground scenes
-//! render. The boost has no control here; it stays a setting (`hex settings
-//! set vocabulary_boost`).
+//! render. Two switches above the list turn the vocabulary and its learning
+//! on or off, a star pins a term to the front of the boost list, and a small
+//! card reports the learning loop. The boost level itself stays a setting
+//! (`hex settings set vocabulary_boost`).
 
 use rune::tok::motion::{SETTLE, SETTLE_EXIT};
 use rune::{El, SpringPair, TextEdit, Transition, Tx, col, edit_access, el, row, text};
@@ -11,11 +13,12 @@ use rune_kit::{ControlSize, TextInput};
 use super::Ui;
 use super::controls::{
     ButtonKind, DESCRIPTION, METRICS, Paint, button, modal_scrim_transition, modal_transition,
-    note, page, raised, section_with,
+    note, page, raised, section, section_with, toggle_row,
 };
-use super::lists::remove_button;
+use super::lists::{remove_button, small_button};
 use crate::desktop::i18n::{tr, tr_fill, tr_named};
 use crate::dictation::vocabulary::{self, VocabularyEntry};
+use crate::transcription::gradium::learning::Stats;
 
 const MODAL_WIDTH: f32 = 620.0;
 const PADDING: f32 = 18.0;
@@ -39,6 +42,7 @@ struct TermRow {
     id: u64,
     term: TextEdit,
     sounds_like: TextEdit,
+    starred: bool,
 }
 
 /// The term rows, and whether the sheet is open.
@@ -52,6 +56,8 @@ pub(super) struct VocabularyEditor {
     /// with motion, so opening the sheet never animates its rows.
     added: Option<u64>,
     pub(super) open: bool,
+    /// The learning loop's last summary, refreshed while the pane shows.
+    pub(super) stats: Stats,
 }
 
 impl VocabularyEditor {
@@ -63,6 +69,11 @@ impl VocabularyEditor {
 
     /// Replaces the rows with `entries`, keeping the sheet open or shut.
     pub(super) fn reload(&mut self, entries: &[VocabularyEntry]) {
+        self.reload_with_stars(entries, &[]);
+    }
+
+    /// [`Self::reload`] with the starred terms that lead the boost list.
+    pub(super) fn reload_with_stars(&mut self, entries: &[VocabularyEntry], starred: &[String]) {
         self.rows.clear();
         self.added = None;
         for entry in entries {
@@ -70,6 +81,11 @@ impl VocabularyEditor {
                 TextEdit::new(entry.term.clone()),
                 TextEdit::new(entry.sounds_like.join(", ")),
             );
+            if let Some(row) = self.rows.last_mut() {
+                row.starred = starred
+                    .iter()
+                    .any(|term| term.trim().eq_ignore_ascii_case(&entry.term));
+            }
         }
     }
 
@@ -81,8 +97,26 @@ impl VocabularyEditor {
             id,
             term,
             sounds_like,
+            starred: false,
         });
         id
+    }
+
+    /// Flips the star on row `id`; a row already removed does nothing.
+    pub(super) fn toggle_star(&mut self, id: u64) {
+        if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
+            row.starred = !row.starred;
+        }
+    }
+
+    /// The non-empty terms the person starred, as `settings.json` stores them.
+    pub(super) fn project_starred(&self) -> Vec<String> {
+        self.rows
+            .iter()
+            .filter(|row| row.starred)
+            .map(|row| row.term.text.trim().to_owned())
+            .filter(|term| !term.is_empty())
+            .collect()
     }
 
     /// The term (or, with `sounds_like`, the spellings) field of row `id`.
@@ -192,7 +226,11 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> El {
         );
     }
     for entry in &ui.vocabulary.rows {
-        rows.push(term_row(p, entry, false).px(METRICS.row_px).py(6.0));
+        rows.push(
+            term_row(p, entry, false, entry.starred)
+                .px(METRICS.row_px)
+                .py(6.0),
+        );
     }
     if ui.vocabulary.clamped() {
         rows.push(
@@ -207,6 +245,8 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> El {
     }
     let content = page("vocabulary-content")
         .child(intro(ui, p))
+        .child(switches(ui, p))
+        .child(learning_stats(ui, p))
         .child(section_with(
             p,
             "vocabulary",
@@ -217,15 +257,119 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> El {
     super::scroll_body(p.k, "vocabulary-scroll", content)
 }
 
+/// The two master switches: use the list, and learn from edits.
+fn switches(ui: &Ui, p: Paint) -> El {
+    let enabled = ui.settings.vocabulary_enabled;
+    let learning = ui.settings.vocabulary_learning;
+    let rows = vec![
+        toggle_row(
+            p,
+            "vocabulary-enabled",
+            tr("Use vocabulary"),
+            Some(tr(
+                "Off stops recognition hints, corrections, rewriting prompts, and search.",
+            )),
+            enabled,
+            |ui: &mut Ui| {
+                let on = !ui.settings.vocabulary_enabled;
+                ui.update(|settings| settings.vocabulary_enabled = on);
+            },
+        ),
+        toggle_row(
+            p,
+            "vocabulary-learning",
+            tr("Learn from edits"),
+            Some(tr(
+                "On asks the Post Transcription model about a name you fix after dictating.",
+            )),
+            learning,
+            |ui: &mut Ui| {
+                let on = !ui.settings.vocabulary_learning;
+                ui.update(|settings| settings.vocabulary_learning = on);
+            },
+        ),
+    ];
+    section(p, "vocabulary-switches", tr("Vocabulary"), rows)
+}
+
+/// The last learning summary: how often corrections happen, and which word
+/// needed one most. The rate is approximate: one watched paste can teach at
+/// most one correction, so corrections over retained dictations is a useful
+/// signal, not an exact count.
+fn learning_stats(ui: &Ui, p: Paint) -> El {
+    let stats = &ui.vocabulary.stats;
+    let dictations = ui.history.total();
+    let summary = if stats.corrections == 0 {
+        tr("No corrections learned yet.").to_string()
+    } else if dictations == 0 {
+        tr_fill(
+            "{} corrections learned. History is empty, so there is no rate yet.",
+            &stats.corrections.to_string(),
+        )
+    } else {
+        let rate = (f64::from(stats.corrections) / dictations as f64 * 100.0).round() as u32;
+        tr_named(
+            "Learned {corrections} corrections across {dictations} retained dictations ({rate}%).",
+            &[
+                ("corrections", &stats.corrections.to_string()),
+                ("dictations", &dictations.to_string()),
+                ("rate", &rate.to_string()),
+            ],
+        )
+    };
+    let mut card = raised(p, "vocabulary-learning-stats").child(
+        col()
+            .key("copy")
+            .px(METRICS.row_px)
+            .py(14.0)
+            .gap(4.0)
+            .child(
+                text(tr("Learning"))
+                    .font(p.k.ty.body_medium)
+                    .color(p.text()),
+            )
+            .child(text(summary).font(DESCRIPTION).color(p.muted()).wrap()),
+    );
+    if let Some((heard, right, count)) = &stats.most_corrected {
+        card = card.child(
+            text(tr_named(
+                "Most corrected: {heard} → {right} ({count} times)",
+                &[
+                    ("heard", heard),
+                    ("right", right),
+                    ("count", &count.to_string()),
+                ],
+            ))
+            .key("most-corrected")
+            .font(DESCRIPTION)
+            .color(p.muted())
+            .px(METRICS.row_px)
+            .pb(14.0)
+            .wrap(),
+        );
+    }
+    card
+}
+
 /// The pane's opening card: what the list does, how many terms it holds, and
 /// what the selected model reads.
 fn intro(ui: &Ui, p: Paint) -> El {
     let mut notes = Vec::new();
-    if let Some(unused) = unused_note(ui) {
-        notes.push(unused);
+    if !ui.settings.vocabulary_enabled {
+        notes.push(
+            tr("Vocabulary is off. Turn it on to use these terms in dictation and search.")
+                .to_string(),
+        );
+    } else {
+        if let Some(unused) = unused_note(ui) {
+            notes.push(unused);
+        }
+        if let Some(budget) = budget_note(ui) {
+            notes.push(budget);
+        }
     }
-    if let Some(budget) = budget_note(ui) {
-        notes.push(budget);
+    if !ui.settings.vocabulary_learning {
+        notes.push(tr("Learning from edits is off. Add terms here instead.").to_string());
     }
     raised(p, "vocabulary-intro").child(
         col()
@@ -269,6 +413,9 @@ pub(super) fn summary(ui: &Ui) -> String {
 /// none (Parakeet biases toward it; Whisper and Qwen3-ASR read it as a
 /// prompt).
 pub(super) fn unused_note(ui: &Ui) -> Option<String> {
+    if !ui.settings.vocabulary_enabled {
+        return None;
+    }
     let model = crate::transcription::models::definition(ui.settings.transcription.model);
     (!model.uses_vocabulary()).then(|| {
         tr_fill(
@@ -282,6 +429,9 @@ pub(super) fn unused_note(ui: &Ui) -> Option<String> {
 /// list holds: Parakeet's bias cap, or Whisper's and Qwen3-ASR's prompt
 /// budget, as transcription applies them.
 fn budget_note(ui: &Ui) -> Option<String> {
+    if !ui.settings.vocabulary_enabled {
+        return None;
+    }
     let entries = ui.vocabulary.project();
     let read = crate::transcription::models::definition(ui.settings.transcription.model)
         .vocabulary_terms_read(&entries);
@@ -327,8 +477,12 @@ pub(super) fn close(ui: &mut Ui) {
 /// forgets them from the learning file so the pane is the one list. Returns
 /// whether there was anything to import.
 pub(super) fn sync_learned(ui: &mut Ui) -> bool {
+    if !ui.live() {
+        return false;
+    }
     let learned = crate::transcription::gradium::learning::Learned::load();
-    if learned.corrections.is_empty() {
+    ui.vocabulary.stats = learned.stats();
+    if learned.corrections.is_empty() || !crate::dictation::vocabulary::learning_enabled() {
         return false;
     }
     let pairs: Vec<(String, String)> = learned
@@ -383,7 +537,7 @@ fn remove_row(ui: &mut Ui, id: u64) {
     }
 }
 
-fn term_row(p: Paint, entry: &TermRow, added: bool) -> El {
+fn term_row(p: Paint, entry: &TermRow, added: bool, starred: bool) -> El {
     let id = entry.id;
     let term_row = row()
         .key(row_key(id))
@@ -412,6 +566,15 @@ fn term_row(p: Paint, entry: &TermRow, added: bool) -> El {
                 .grow(1.0)
                 .shrink(),
         )
+        .child(small_button(
+            p,
+            "star",
+            if starred { tr("Starred") } else { tr("Star") },
+            move |ui: &mut Ui, _: &mut Tx| {
+                ui.vocabulary.toggle_star(id);
+                ui.flush_drafts();
+            },
+        ))
         .child(remove_button(
             p,
             ControlSize::Regular,
@@ -429,12 +592,17 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
         return None;
     }
     let c = &p.k.c;
-    let rows = col().key("terms").px(SIDE_ROOM).children(
-        ui.vocabulary
-            .rows
-            .iter()
-            .map(|entry| term_row(p, entry, ui.vocabulary.added == Some(entry.id))),
-    );
+    let rows = col()
+        .key("terms")
+        .px(SIDE_ROOM)
+        .children(ui.vocabulary.rows.iter().map(|entry| {
+            term_row(
+                p,
+                entry,
+                ui.vocabulary.added == Some(entry.id),
+                entry.starred,
+            )
+        }));
     let height = ui.vocabulary.rows.len() as f32 * ROW_HEIGHT + FADES.0 + FADES.1;
     let terms = col()
         .key("term-column")

@@ -17,6 +17,11 @@ use self::generation::{
 };
 
 const PROTOCOL_PROMPT: &str = "You transform dictated speech into replacement text. Return only the text that should be pasted. Do not add an explanation, label, alternative, or Markdown fence.\n\nNumbers: keep every number the speaker said. Never drop, merge, reorder, round, or reinterpret a number, and never add thousands separators or other formatting to a number that the transcript already writes in digits.\n\nLists: unless the profile instructions say otherwise, when the speaker enumerates items (for example \"point one ... point two ...\", \"first ... second ...\", or \"number one ... number two ...\"), keep every item and write them as a numbered list, one item per line (\"1. ...\", \"2. ...\"), without the spoken cue words.";
+
+/// Most terms one post-transcription formatter prompt names. The formatter
+/// pays for every term in attention and latency, and the deterministic
+/// replacement pass enforces the rest of the list anyway.
+const FORMATTER_VOCABULARY_TERMS: usize = 64;
 const CATALOG_DEADLINE: Duration = Duration::from_secs(10);
 
 pub use crate::app_settings::DictationPostProcessing as PostProcessingSettings;
@@ -1281,17 +1286,25 @@ impl Processed {
             && !self.text.trim().is_empty()
         {
             let started = Instant::now();
-            let prompt = super::post_transcription::build_prompt(&plan.instructions, &self.text);
+            let vocabulary =
+                crate::dictation::vocabulary::formatter_vocabulary(FORMATTER_VOCABULARY_TERMS);
+            let prompt = super::post_transcription::build_prompt_with_vocabulary(
+                &plan.instructions,
+                &self.text,
+                &vocabulary,
+            );
             let model = format!("{}/{}", plan.model.provider, plan.model.id);
             match generate_cancellable(&prompt, Some(&plan.model), plan.deadline, cancelled) {
                 Ok(generated) => {
                     let latency_ms = started.elapsed().as_millis() as u64;
                     match super::post_transcription::parse_reply(&generated.text, &self.text) {
                         Some(text) => {
+                            let text = crate::transcription::gradium::learning::enforce(&text);
                             tracing::info!(
                                 model = %model,
                                 latency_ms,
                                 chars = text.chars().count() as u64,
+                                vocabulary_terms = vocabulary.split("; ").filter(|term| !term.is_empty()).count(),
                                 "post-transcription formatting completed"
                             );
                             self.text = text;
@@ -1457,6 +1470,137 @@ fn generate_cancellable(
     )
 }
 
+/// Uses the Post Transcription model to decide whether a hand correction is
+/// vocabulary worth learning. The model is the same one the person picked in
+/// Post Transcription, so the learning gate and the formatter share one
+/// choice. `None` means do not learn: either the model said no, or it could
+/// not answer and the deterministic gate rejected the word.
+pub(crate) fn classify_vocabulary_correction(
+    heard: &str,
+    right: &str,
+    context: &str,
+) -> Option<String> {
+    let fallback = || {
+        crate::transcription::gradium::learning::looks_like_proper_noun(heard, right)
+            .then(|| right.trim().to_owned())
+    };
+    let Ok(settings) = crate::app_settings::AppSettings::read() else {
+        return fallback();
+    };
+    let post = &settings.dictation_processing.post_transcription;
+    let Some((provider, id)) = post
+        .model
+        .as_deref()
+        .and_then(|key| key.trim().split_once('/'))
+        .filter(|(provider, id)| !provider.is_empty() && !id.is_empty())
+    else {
+        return fallback();
+    };
+    let model = Model {
+        provider: provider.to_owned(),
+        id: id.to_owned(),
+        variant: post.variant.clone(),
+    };
+    let prompt = vocabulary_classification_prompt(heard, right, context);
+    let started = Instant::now();
+    match generate_cancellable(
+        &prompt,
+        Some(&model),
+        Duration::from_secs(10),
+        &AtomicBool::new(false),
+    ) {
+        Ok(generated) => {
+            let latency_ms = started.elapsed().as_millis() as u64;
+            match parse_vocabulary_classification(&generated.text, right) {
+                Some(Some(term)) => {
+                    tracing::info!(
+                        model = %format!("{}/{}", model.provider, model.id),
+                        latency_ms,
+                        heard,
+                        term,
+                        "the vocabulary model accepted a correction"
+                    );
+                    Some(term)
+                }
+                Some(None) => {
+                    tracing::info!(
+                        model = %format!("{}/{}", model.provider, model.id),
+                        latency_ms,
+                        heard,
+                        right,
+                        "the vocabulary model rejected a correction"
+                    );
+                    None
+                }
+                None => {
+                    tracing::warn!(
+                        model = %format!("{}/{}", model.provider, model.id),
+                        latency_ms,
+                        "the vocabulary model returned no usable JSON; using the local gate"
+                    );
+                    fallback()
+                }
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                model = %format!("{}/{}", model.provider, model.id),
+                %error,
+                "the vocabulary model did not answer; using the local gate"
+            );
+            fallback()
+        }
+    }
+}
+
+fn vocabulary_classification_prompt(heard: &str, right: &str, context: &str) -> String {
+    let heard = heard.trim().replace('\n', " ");
+    let right = right.trim().replace('\n', " ");
+    let context: String = context
+        .trim()
+        .chars()
+        .take(600)
+        .collect::<String>()
+        .replace('\n', " ");
+    format!(
+        "You are Hex's vocabulary gate. A person dictated text and then corrected one word in the pasted result.\n\n\
+         Context: {context}\n\
+         Heard: {heard}\n\
+         Corrected: {right}\n\n\
+         Decide whether the corrected spelling is a proper noun, brand, product, person, or technical term worth adding to a personal vocabulary. Learn names and unusual spellings. Do not learn common words, everyday acronyms, grammar fixes, numbers, URLs, file paths, or code.\n\n\
+         Return only one JSON object with this exact shape, with no markdown fences and no other text:\n\
+         {{\"learn\": true, \"term\": \"the spelling to store\"}}\n\
+         Use {{\"learn\": false}} when the correction is not vocabulary."
+    )
+}
+
+#[derive(Deserialize)]
+struct VocabularyClassification {
+    learn: bool,
+    #[serde(default)]
+    term: Option<String>,
+}
+
+/// `Some(Some(term))` to learn, `Some(None)` to reject, `None` when the reply
+/// is not the JSON object asked for.
+fn parse_vocabulary_classification(reply: &str, right: &str) -> Option<Option<String>> {
+    let candidate = super::post_transcription::json_object(reply)?;
+    let reply: VocabularyClassification = serde_json::from_str(candidate).ok()?;
+    if !reply.learn {
+        return Some(None);
+    }
+    let term = reply
+        .term
+        .as_deref()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .unwrap_or(right.trim());
+    if term.is_empty() || term.chars().count() > 64 {
+        return None;
+    }
+    Some(Some(term.to_owned()))
+}
+
 /// Finds the running OpenCode service, or why it can't answer. Service
 /// discovery spends the generation's own remaining budget, so a stalled
 /// OpenCode falls back by the deadline instead of adding its fixed lookup
@@ -1579,6 +1723,23 @@ mod tests {
     use std::thread;
 
     use url::Url;
+
+    #[test]
+    fn the_vocabulary_gate_reads_one_json_object() {
+        assert_eq!(
+            parse_vocabulary_classification(r#"{"learn":true,"term":"GitHub"}"#, "github"),
+            Some(Some("GitHub".into()))
+        );
+        assert_eq!(
+            parse_vocabulary_classification("```json\n{\"learn\":false}\n```", "the"),
+            Some(None)
+        );
+        assert_eq!(
+            parse_vocabulary_classification(r#"{"learn":true}"#, "Gradium"),
+            Some(Some("Gradium".into()))
+        );
+        assert_eq!(parse_vocabulary_classification("not json", "GitHub"), None);
+    }
 
     #[test]
     fn managed_locks_drop_the_rewrite_and_transformations() {
