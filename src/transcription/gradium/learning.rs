@@ -543,11 +543,22 @@ pub(crate) fn enforce(text: &str) -> String {
     if text.trim().is_empty() || !crate::dictation::vocabulary::enabled() {
         return text.to_owned();
     }
-    enforce_with(
-        text,
-        &crate::dictation::vocabulary::transcription_entries(),
-        &Learned::load().corrections,
-    )
+    let entries = crate::dictation::vocabulary::transcription_entries();
+    let mut learned = Learned::load();
+    let text = enforce_with(text, &entries, &learned.corrections);
+    let mut used = false;
+    for entry in &entries {
+        if contains_phrase(&text, &entry.term) {
+            learned.note_use(&entry.term);
+            used = true;
+        }
+    }
+    // The formatter can be the only stage that puts a term right, so this
+    // final pass is also the place its use is counted.
+    if used {
+        learned.save();
+    }
+    text
 }
 
 fn enforce_with(text: &str, entries: &[VocabularyEntry], corrections: &[Correction]) -> String {
@@ -1161,12 +1172,15 @@ mod tests {
                     count: 1,
                 },
             ],
-            terms: Vec::new(),
-            usage: Default::default(),
-            history: Vec::new(),
+            history: vec![Correction {
+                heard: "bridge alon".into(),
+                right: "Bragelonne".into(),
+                count: 2,
+            }],
+            ..Default::default()
         };
         let stats = learned.stats();
-        assert_eq!(stats.corrections, 4);
+        assert_eq!(stats.corrections, 6);
         assert_eq!(
             stats.most_corrected,
             Some(("gradiom".into(), "Gradium".into(), 3))
