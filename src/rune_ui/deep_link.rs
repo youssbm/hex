@@ -43,9 +43,10 @@ impl LabsLink {
 }
 
 /// The main panes a `hex://settings/<pane>` link names.
-const PANES: [(&str, Pane); 6] = [
+const PANES: [(&str, Pane); 7] = [
     ("general", Pane::General),
     ("output", Pane::Output),
+    ("post-transcription", Pane::PostTranscription),
     // Only while Labs › Modes editor shows it; otherwise `open` logs and
     // leaves the window where it was.
     ("modes", Pane::Modes),

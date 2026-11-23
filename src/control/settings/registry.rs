@@ -278,6 +278,11 @@ pub(super) const KEYS: &[Key] = &[
         "Each dictation keeps its final period; off drops one before it pastes",
     ),
     key(
+        "dictation_processing.post_transcription",
+        Kind::Json,
+        "OpenCode post-transcription formatting: enabled, model, variant, and prompt",
+    ),
+    key(
         "history_retention",
         Kind::Choice(&["off", "day", "week", "month", "forever"]),
         "How long dictation history is kept",

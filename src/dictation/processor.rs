@@ -83,6 +83,9 @@ pub struct Profile {
     /// Output › End with a dot off: the last stage removes one trailing
     /// period before the text pastes. Every mode reads the same setting.
     strip_final_dot: bool,
+    /// Output › Post Transcription: one OpenCode formatting request after
+    /// transcription, shared by every mode.
+    post_transcription: Option<super::post_transcription::Plan>,
 }
 
 impl Profile {
@@ -98,6 +101,7 @@ impl Profile {
             vocabulary: Vec::new(),
             speech: None,
             strip_final_dot: false,
+            post_transcription: None,
         }
     }
 
@@ -325,6 +329,8 @@ impl Profiles {
         let mut global = Profile::from_mode(&settings.default_mode);
         global.name = "Global".into();
         global.strip_final_dot = !settings.end_with_dot;
+        let post_transcription = super::post_transcription::plan(&settings.post_transcription);
+        global.post_transcription = post_transcription.clone();
         // Snippets first, so they win a same-length overlap with a mode's
         // correction, then Global's corrections. Both apply to every mode.
         let mut rules = settings.snippets.clone();
@@ -335,6 +341,7 @@ impl Profiles {
         for mode in &settings.modes {
             let mut profile = Profile::from_mode(mode);
             profile.strip_final_dot = !settings.end_with_dot;
+            profile.post_transcription = post_transcription.clone();
             for application in &mode.applications {
                 let selector = if cfg!(target_os = "macos") {
                     ContextSelector::application(application.clone())
@@ -419,6 +426,7 @@ impl Profiles {
         // A cleanup-only dictation still shows the HUD's processing stage.
         profile.ai_enabled
             || !profile.transformations.is_empty()
+            || profile.post_transcription.is_some()
             || crate::dictation::apple_cleanup::runs_here()
     }
 
@@ -551,6 +559,7 @@ impl Profiles {
                 observation,
                 transformations: profile.transformations.clone(),
                 strip_final_dot: profile.strip_final_dot,
+                post_transcription: profile.post_transcription.clone(),
             };
         }
         let prompt = prompt(
@@ -593,6 +602,7 @@ impl Profiles {
             observation: Some(observation),
             transformations: profile.transformations.clone(),
             strip_final_dot: profile.strip_final_dot,
+            post_transcription: profile.post_transcription.clone(),
         }
     }
 }
@@ -621,6 +631,7 @@ fn voice_prompt_processed(
             observation: None,
             transformations: Vec::new(),
             strip_final_dot: false,
+            post_transcription: None,
         };
     }
     let request = voice_prompt_request(
@@ -682,6 +693,7 @@ fn voice_prompt_answer(
         observation,
         transformations: transformations.to_vec(),
         strip_final_dot: false,
+        post_transcription: None,
     }
 }
 
@@ -1231,6 +1243,9 @@ pub struct Processed {
     /// The mode's prompt asked for no final dot, so the last stage removes
     /// one after the transformations.
     pub(crate) strip_final_dot: bool,
+    /// Output › Post Transcription: the OpenCode formatting request this
+    /// dictation runs before its transformations.
+    pub(crate) post_transcription: Option<super::post_transcription::Plan>,
 }
 
 pub type ProcessingObservation = crate::desktop::events::DictationProcessing;
@@ -1246,11 +1261,13 @@ impl Processed {
             observation: None,
             transformations: Vec::new(),
             strip_final_dot: false,
+            post_transcription: None,
         }
     }
 
-    /// Runs the selected transformations, the last processing stage. The chain
-    /// is one stage: a failure keeps the previous text and records the error.
+    /// Runs the global post-transcription formatter, then the selected
+    /// transformations, then the final-dot rule. A failed formatting request
+    /// keeps the transcript and still lets the other stages run.
     pub fn apply_transformations(
         &mut self,
         client: &crate::personal_commands::TransformationClient,
@@ -1258,6 +1275,41 @@ impl Processed {
         cancelled: &AtomicBool,
         source: Source,
     ) {
+        if let Some(plan) = self.post_transcription.take()
+            && source == Source::Dictation
+            && !cancelled.load(Ordering::Acquire)
+            && !self.text.trim().is_empty()
+        {
+            let started = Instant::now();
+            let prompt = super::post_transcription::build_prompt(&plan.instructions, &self.text);
+            let model = format!("{}/{}", plan.model.provider, plan.model.id);
+            match generate_cancellable(&prompt, Some(&plan.model), plan.deadline, cancelled) {
+                Ok(generated) => {
+                    let latency_ms = started.elapsed().as_millis() as u64;
+                    match super::post_transcription::parse_reply(&generated.text, &self.text) {
+                        Some(text) => {
+                            tracing::info!(
+                                model = %model,
+                                latency_ms,
+                                chars = text.chars().count() as u64,
+                                "post-transcription formatting completed"
+                            );
+                            self.text = text;
+                        }
+                        None => tracing::warn!(
+                            model = %model,
+                            latency_ms,
+                            "post-transcription formatting returned no usable JSON; keeping the transcript"
+                        ),
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    model = %model,
+                    %error,
+                    "post-transcription formatting failed; keeping the transcript"
+                ),
+            }
+        }
         if !self.transformations.is_empty() && !cancelled.load(Ordering::Acquire) {
             let started = Instant::now();
             let transformed = client.transform(
@@ -2176,6 +2228,7 @@ mod tests {
             }],
             snippets: Vec::new(),
             end_with_dot: true,
+            post_transcription: crate::app_settings::PostTranscriptionSettings::default(),
         });
         let profile = profiles.select(&context("Notes", None));
         let labs = DictationLabs {
@@ -2990,5 +3043,35 @@ mod tests {
         assert_eq!(strip_final_dot("Hello?"), "Hello?");
         assert_eq!(strip_final_dot("Hello!"), "Hello!");
         assert_eq!(strip_final_dot("."), "");
+    }
+
+    #[test]
+    fn the_post_transcription_setting_reaches_every_mode() {
+        use crate::app_settings::{
+            DictationMode, DictationProcessingSettings, PostTranscriptionSettings,
+        };
+        let settings = DictationProcessingSettings {
+            modes: vec![DictationMode {
+                name: "Notes".into(),
+                applications: vec!["Notes".into()],
+                ..DictationMode::default()
+            }],
+            post_transcription: PostTranscriptionSettings {
+                enabled: true,
+                model: Some("opencode-go/glm-5.3-flash".into()),
+                ..PostTranscriptionSettings::default()
+            },
+            ..DictationProcessingSettings::default()
+        };
+        let profiles = Profiles::from_settings(&settings);
+        assert!(profiles.default.post_transcription.is_some());
+        assert!(profiles.contextual[0].profile.post_transcription.is_some());
+        assert!(profiles.processes(&ContextSnapshot::default()));
+
+        let mut off = settings.clone();
+        off.post_transcription.enabled = false;
+        let profiles = Profiles::from_settings(&off);
+        assert!(profiles.default.post_transcription.is_none());
+        assert!(profiles.contextual[0].profile.post_transcription.is_none());
     }
 }

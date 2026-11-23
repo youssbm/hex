@@ -35,6 +35,9 @@ pub(super) enum Target {
     /// thinking variant, and its default entry clears it, so OpenCode's own
     /// default model writes them.
     MeetingSummary,
+    /// `dictation_processing.post_transcription.model`: the global formatter
+    /// that runs after transcription.
+    PostTranscription,
 }
 
 /// The meeting summary picker's default entry, and the field while it is
@@ -119,6 +122,14 @@ impl Models {
 
     pub(super) fn available(&self) -> bool {
         matches!(self.state, ModelCatalogState::Loaded(_))
+    }
+
+    pub(super) fn model_count(&self) -> Option<usize> {
+        self.catalog().map(|catalog| catalog.models.len())
+    }
+
+    pub(super) fn is_not_running(&self) -> bool {
+        matches!(self.state, ModelCatalogState::NotRunning)
     }
 
     fn catalog(&self) -> Option<&ModelCatalog> {
@@ -231,6 +242,10 @@ fn selected(settings: &AppSettings, target: Target) -> (Option<&str>, Option<&st
                 .filter(|model| !model.trim().is_empty()),
             None,
         ),
+        Target::PostTranscription => {
+            let processing = &settings.dictation_processing.post_transcription;
+            (processing.model.as_deref(), processing.variant.as_deref())
+        }
     }
 }
 
@@ -250,6 +265,11 @@ fn set_model(
             processing.variant = variant;
         }
         Target::MeetingSummary => settings.meetings.opencode_model = model,
+        Target::PostTranscription => {
+            let processing = &mut settings.dictation_processing.post_transcription;
+            processing.model = model;
+            processing.variant = variant;
+        }
     }
 }
 
@@ -307,15 +327,19 @@ fn status(models: &Models) -> String {
 pub(super) fn rows(ui: &Ui, p: Paint, target: Target, layer: &mut Vec<El>) -> Vec<El> {
     let (model, variant) = selected(&ui.settings, target);
     let meeting = target == Target::MeetingSummary;
-    // An unset meeting summary uses OpenCode's own default model, so the field
-    // names that instead of a mode's automatic or default presentation.
-    let presentation = if meeting && model.is_none() {
+    let post = target == Target::PostTranscription;
+    // An unset meeting summary uses OpenCode's own default model, and post
+    // transcription needs an explicit model, so neither shows the automatic
+    // presentation.
+    let presentation = if (meeting || post) && model.is_none() {
         None
     } else {
         model_presentation(&ui.models.state, model)
     };
     let field_label = if meeting {
         tr("Summary model")
+    } else if post {
+        tr("Formatting model")
     } else {
         tr("OpenCode model")
     };
@@ -478,6 +502,9 @@ fn model_picker(ui: &Ui, p: Paint, target: Target, field: El, layer: &mut Vec<El
         if target == Target::MeetingSummary {
             keys.push(None);
             options.push(ComboboxOption::new("0", tr(SUMMARY_AUTOMATIC)));
+        } else if target == Target::PostTranscription {
+            // A model is required before post transcription can turn on, so
+            // there is no automatic entry to choose.
         } else if let Some(name) = &catalog.default_name {
             keys.push(None);
             let mut option = ComboboxOption::new("0", default_entry_label(catalog));

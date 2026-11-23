@@ -18,6 +18,11 @@ static OUTPUT_ICON: Icon = Icon {
     view: 24.0,
     body: include_str!("../../assets/icons/output.svg"),
 };
+static POST_TRANSCRIPTION_ICON: Icon = Icon {
+    name: "hex-post-transcription",
+    view: 24.0,
+    body: include_str!("../../assets/icons/post-transcription.svg"),
+};
 static SNIPPETS_ICON: Icon = Icon {
     name: "hex-snippets",
     view: 24.0,
@@ -70,6 +75,8 @@ pub(super) enum Pane {
     /// What Hex does to every dictation and in some apps, read-only: the
     /// person's agent edits it.
     Output,
+    /// The global OpenCode formatter that runs after transcription.
+    PostTranscription,
     /// Saved text a spoken shortcut expands to, in every dictation.
     Snippets,
     /// Names and jargon Hex should spell right, sent to the speech model and
@@ -105,6 +112,7 @@ impl Pane {
     pub(super) const ALL: &[Pane] = &[
         Pane::General,
         Pane::Output,
+        Pane::PostTranscription,
         Pane::Snippets,
         Pane::Vocabulary,
         Pane::Modes,
@@ -143,6 +151,7 @@ impl Pane {
         match self {
             Pane::General => tr("General"),
             Pane::Output => tr("Output"),
+            Pane::PostTranscription => tr("Post Transcription"),
             Pane::Snippets => tr("Snippets"),
             Pane::Vocabulary => tr("Vocabulary"),
             Pane::Modes => tr("Modes"),
@@ -163,6 +172,7 @@ impl Pane {
         match self {
             Pane::General => "nav-general",
             Pane::Output => "nav-output",
+            Pane::PostTranscription => "nav-post-transcription",
             Pane::Snippets => "nav-snippets",
             Pane::Vocabulary => "nav-vocabulary",
             Pane::Modes => "nav-modes",
@@ -183,6 +193,7 @@ impl Pane {
         match self {
             Pane::General => &SETTINGS_ICON,
             Pane::Output => &OUTPUT_ICON,
+            Pane::PostTranscription => &POST_TRANSCRIPTION_ICON,
             Pane::Snippets => &SNIPPETS_ICON,
             Pane::Vocabulary => &VOCABULARY_ICON,
             Pane::Modes => &MODES_ICON,

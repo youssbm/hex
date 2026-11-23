@@ -52,6 +52,7 @@ mod modes;
 mod onboarding;
 mod onboarding_kit;
 mod output;
+mod post_transcription;
 mod paste_access;
 #[cfg(all(hex_capture, target_os = "macos"))]
 pub(crate) mod paste_picker;
@@ -705,6 +706,7 @@ pub(crate) struct Ui {
     captures: captures::CapturesPane,
     modes: modes::ModesPane,
     output: output::OutputPane,
+    post_transcription: post_transcription::PostTranscriptionPane,
     snippets: snippets::SnippetsPane,
     picker: picker::Picker,
     /// Speech models already on this computer, and choosing one.
@@ -802,6 +804,7 @@ impl Ui {
         let vocabulary = vocabulary::VocabularyEditor::new(&settings.vocabulary);
         let snippets = snippets::SnippetsPane::new(&settings);
         let output = output::OutputPane::new(&settings);
+        let post_transcription = post_transcription::PostTranscriptionPane::new(&settings);
         Self {
             settings,
             #[cfg(test)]
@@ -839,6 +842,7 @@ impl Ui {
             captures: captures::CapturesPane::default(),
             modes,
             output,
+            post_transcription,
             snippets,
             picker: picker::Picker::default(),
             found: found::FoundState::default(),
@@ -938,6 +942,13 @@ impl Ui {
                 .post_processing
                 .prompt,
         );
+        self.post_transcription.rebase_prompt(
+            &self
+                .settings
+                .dictation_processing
+                .post_transcription
+                .prompt,
+        );
         self.snippets
             .rebase(&self.settings.dictation_processing.snippets);
         self.draft_since = None;
@@ -958,6 +969,7 @@ impl Ui {
         let mut candidate = self.settings.clone();
         self.modes.project(&mut candidate);
         self.output.project(&mut candidate);
+        self.post_transcription.project(&mut candidate);
         candidate.vocabulary = self.vocabulary.project();
         candidate.dictation_processing.snippets = self.snippets.project();
         self.lab_store.project_phrase(&mut candidate);
@@ -1412,7 +1424,9 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     // Modes, or Meetings › Settings while OpenCode writes the summaries.
     changed |= ui.models.poll(
         ui.live()
-            && (ui.pane == Pane::Modes || platform_settings::summary_model_shown(ui))
+            && (ui.pane == Pane::Modes
+                || ui.pane == Pane::PostTranscription
+                || platform_settings::summary_model_shown(ui))
             && ui.window.as_ref().is_some_and(rune::AppHandle::is_visible),
     );
     changed |= ui.history.poll(
@@ -1431,6 +1445,9 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     }
     if ui.pane == Pane::Output && !ui.labs_open {
         changed |= output::poll(ui, clock, tx);
+    }
+    if ui.pane == Pane::PostTranscription && !ui.labs_open {
+        changed |= post_transcription::poll(ui);
     }
     // Mode rows show their applications' icons, which the catalog locates.
     if matches!(ui.pane, Pane::Modes | Pane::Output)
@@ -1565,6 +1582,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         _ if ui.labs_open => (vec![labs::tabs(ui, p)], labs::page(ui, p, cx, &mut layer)),
         Pane::General => (Vec::new(), general::pane(ui, p, &mut layer)),
         Pane::Output => (Vec::new(), output::pane(ui, p, cx.is_reduced_motion())),
+        Pane::PostTranscription => (Vec::new(), post_transcription::pane(ui, p, &mut layer)),
         Pane::Snippets => (Vec::new(), snippets::pane(ui, p)),
         Pane::Vocabulary => (Vec::new(), vocabulary::pane(ui, p)),
         Pane::Modes => modes::pane(ui, p, &mut layer),

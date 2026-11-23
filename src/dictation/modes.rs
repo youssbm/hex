@@ -422,6 +422,7 @@ mod tests {
             ],
             snippets: Vec::new(),
             end_with_dot: true,
+            post_transcription: crate::app_settings::PostTranscriptionSettings::default(),
         };
         let matched = |application: Option<&str>, host: Option<&str>| {
             speech_for(&settings, application, host).map(|choice| choice.language)

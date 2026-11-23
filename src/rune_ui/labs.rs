@@ -43,6 +43,7 @@ pub(super) fn main_panes(ui: &Ui) -> Vec<Pane> {
     let mut panes = vec![
         Pane::General,
         Pane::Output,
+        Pane::PostTranscription,
         Pane::Snippets,
         Pane::Vocabulary,
     ];

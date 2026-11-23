@@ -300,6 +300,7 @@ fn a_throwing_or_slow_transformation_pastes_the_text_unchanged() {
             observation: None,
             transformations: vec![id.into()],
             strip_final_dot: false,
+            post_transcription: None,
         };
         processed.apply_transformations(
             &client,

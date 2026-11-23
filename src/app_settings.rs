@@ -37,7 +37,7 @@ pub use browser_origins::{normalize_browser_origins, parse_browser_origins};
 #[cfg(hex_capture)]
 pub use capture::*;
 pub use dictation_processing::{
-    DictationMode, DictationPostProcessing, DictationProcessingSettings,
+    DictationMode, DictationPostProcessing, DictationProcessingSettings, PostTranscriptionSettings,
 };
 pub use extra_shortcuts::*;
 pub use hotkeys::*;

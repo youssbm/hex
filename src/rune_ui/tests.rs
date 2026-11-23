@@ -3163,8 +3163,16 @@ fn the_sidebar_moves_with_arrows_and_command_numbers() {
     );
     key(&mut rt, Key::Command('1'), command);
     assert_eq!(rt.state.pane, Pane::General);
-    key(&mut rt, Key::Command('9'), command);
-    assert_eq!(rt.state.pane, Pane::General, "no ninth pane");
+    let main = labs::main_panes(&rt.state);
+    if main.len() >= 9 {
+        key(&mut rt, Key::Command('9'), command);
+        assert_eq!(rt.state.pane, main[8], "Command-9 opens the ninth pane");
+        key(&mut rt, Key::Command('1'), command);
+        assert_eq!(rt.state.pane, Pane::General);
+    } else {
+        key(&mut rt, Key::Command('9'), command);
+        assert_eq!(rt.state.pane, Pane::General, "no ninth pane");
+    }
     key(&mut rt, Key::Up, Mods::default());
     assert_eq!(rt.state.pane, Pane::General, "Up stops at the first pane");
     let main = labs::main_panes(&rt.state);
@@ -3817,6 +3825,33 @@ fn output_keeps_the_final_dot_until_the_switch_is_off() {
     assert!(rt.state.settings.dictation_processing.end_with_dot);
     tap(&mut rt, "end-with-dot");
     assert!(!rt.state.settings.dictation_processing.end_with_dot);
+}
+
+/// Post Transcription: the switch stays off until OpenCode lists models and
+/// one is chosen, then saves on.
+#[test]
+fn post_transcription_needs_a_model_before_its_switch_turns_on() {
+    let mut state = Ui::with(AppSettings::default(), Service::Fixture(Vec::new()));
+    state.pane = Pane::PostTranscription;
+    let mut rt = runtime_for(state, false, TALL_SIZE);
+    assert!(rt.find("post-transcription-sign-in").is_some());
+    assert!(rt.find("post-transcription-toggle").is_some());
+    tap(&mut rt, "post-transcription-toggle");
+    assert!(
+        !rt.state.settings.dictation_processing.post_transcription.enabled,
+        "no model, no formatting"
+    );
+
+    rt.state.models = super::models::fixture();
+    rt.state
+        .settings
+        .dictation_processing
+        .post_transcription
+        .model = Some("anthropic/claude-haiku-4-5".into());
+    rt.invalidate();
+    settle(&mut rt);
+    tap(&mut rt, "post-transcription-toggle");
+    assert!(rt.state.settings.dictation_processing.post_transcription.enabled);
 }
 
 /// Labs › Transform typed text: Output's Typed text section and its
