@@ -379,10 +379,10 @@ pub struct AppSettings {
     pub vocabulary: Vec<VocabularyEntry>,
     /// Apply the vocabulary to dictation: recognition hints, corrections,
     /// planning prompts, and search.
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    #[serde(default = "default_true")]
     pub vocabulary_enabled: bool,
     /// Learn a corrected spelling from the field a dictation was pasted into.
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    #[serde(default = "default_true")]
     pub vocabulary_learning: bool,
     /// Terms the person pinned to the front of the recognition list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -459,11 +459,6 @@ where
 /// Settings that predate a switch behave as if a new install had it on.
 fn default_true() -> bool {
     true
-}
-
-/// True is the default, so only an explicit off is written to the file.
-fn is_true(value: &bool) -> bool {
-    *value
 }
 
 impl Default for AppSettings {

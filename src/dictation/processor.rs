@@ -1499,7 +1499,7 @@ pub(crate) fn classify_vocabulary_correction(
     let model = Model {
         provider: provider.to_owned(),
         id: id.to_owned(),
-        variant: post.variant.clone(),
+        variant: super::post_transcription::usable_variant(post.variant.as_deref()),
     };
     let prompt = vocabulary_classification_prompt(heard, right, context);
     let started = Instant::now();

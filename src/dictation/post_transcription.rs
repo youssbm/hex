@@ -59,14 +59,26 @@ pub(crate) fn plan(settings: &PostTranscriptionSettings) -> Option<Plan> {
         model: Model {
             provider: provider.to_owned(),
             id: id.to_owned(),
-            variant: settings
-                .variant
-                .clone()
-                .filter(|variant| !variant.trim().is_empty()),
+            variant: usable_variant(settings.variant.as_deref()),
         },
         instructions,
         deadline: DEADLINE,
     })
+}
+
+/// A saved thinking variant that means "no variant" is dropped: OpenCode
+/// rejects `none` for a model whose catalog does not carry it, and omitting
+/// the field is the same request.
+pub(crate) fn usable_variant(variant: Option<&str>) -> Option<String> {
+    variant
+        .map(str::trim)
+        .filter(|variant| {
+            !variant.is_empty()
+                && !variant.eq_ignore_ascii_case("none")
+                && !variant.eq_ignore_ascii_case("default")
+                && !variant.eq_ignore_ascii_case("auto")
+        })
+        .map(str::to_owned)
 }
 
 /// The full prompt: the person's instructions, the JSON contract, and the
@@ -150,6 +162,14 @@ fn plausible(original: &str, formatted: &str) -> bool {
 mod tests {
     use super::*;
     use crate::app_settings::PostTranscriptionSettings;
+
+    #[test]
+    fn a_none_variant_is_not_sent_to_opencode() {
+        assert_eq!(usable_variant(Some("none")), None);
+        assert_eq!(usable_variant(Some(" default ")), None);
+        assert_eq!(usable_variant(Some("high")), Some("high".into()));
+        assert_eq!(usable_variant(None), None);
+    }
 
     #[test]
     fn a_plan_needs_the_switch_and_a_provider_model() {
