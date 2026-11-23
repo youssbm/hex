@@ -575,16 +575,26 @@ fn enforce_with(text: &str, entries: &[VocabularyEntry], corrections: &[Correcti
             });
         }
     }
-    for correction in corrections {
-        rules.push(TextReplacement {
+    let text = if rules.is_empty() {
+        text.to_owned()
+    } else {
+        ReplacementSet::new(&rules).replace(text)
+    };
+    // A correction the person made by hand outranks the vocabulary. A stored
+    // term and its "sounds like" spelling can point at each other, so applying
+    // both in one pass would let list order decide; running the corrections
+    // second always lands on the spelling the person chose.
+    let rules: Vec<TextReplacement> = corrections
+        .iter()
+        .map(|correction| TextReplacement {
             matched_phrase: correction.heard.clone(),
             output: correction.right.clone(),
-        });
-    }
+        })
+        .collect();
     if rules.is_empty() {
-        return text.to_owned();
+        return text;
     }
-    ReplacementSet::new(&rules).replace(text)
+    ReplacementSet::new(&rules).replace(&text)
 }
 
 /// A word and the text before it, so an edit that changes a separator (the
@@ -693,8 +703,8 @@ fn words(text: &str) -> Vec<String> {
 /// Whether a corrected spelling looks like a name, brand, or other term worth
 /// learning. This is the precision gate: a formatter may fix "teh" to "the"
 /// all day, and that never belongs in a vocabulary. Names, compounds, mixed
-/// case, acronyms, and email addresses pass; common words, everyday acronyms,
-/// paths, URLs, code, and numbers do not.
+/// case, acronyms, email addresses, and novel lowercase words pass; common
+/// words, everyday acronyms, paths, URLs, code, and numbers do not.
 pub(crate) fn looks_like_proper_noun(heard: &str, right: &str) -> bool {
     let heard = heard.trim();
     let right = right.trim();
@@ -733,7 +743,16 @@ pub(crate) fn looks_like_proper_noun(heard: &str, right: &str) -> bool {
     let known = crate::dictation::vocabulary::entries()
         .iter()
         .any(|entry| entry.term.eq_ignore_ascii_case(right));
+    // A lowercase product name is still a name. The model is the real gate;
+    // this fallback only runs when it is slow or absent, and dropping a real
+    // name is worse than keeping a term the person can delete.
+    let novel = words.len() == 1
+        && words[0].chars().count() >= 4
+        && words[0]
+            .chars()
+            .all(|character| character.is_alphabetic() || character == '-' || character == '\'');
     known
+        || novel
         || words.iter().any(|word| {
             let mut chars = word.chars();
             let first_upper = chars.next().is_some_and(char::is_uppercase);
@@ -1108,6 +1127,7 @@ mod tests {
         assert!(looks_like_proper_noun("Gradiom", "Gradium"));
         assert!(looks_like_proper_noun("github", "GitHub"));
         assert!(looks_like_proper_noun("open code", "OpenCode"));
+        assert!(looks_like_proper_noun("compose U", "composio"));
         assert!(looks_like_proper_noun(
             "Yusuf BM 2008 at gmail",
             "youssefbm2008@gmail.com"
@@ -1154,6 +1174,24 @@ mod tests {
         assert_eq!(
             enforce_with("push to git hub and Gradiom", &entries, &corrections),
             "push to GitHub and Gradium"
+        );
+    }
+
+    #[test]
+    fn a_learned_correction_outranks_a_vocabulary_entry() {
+        let entries = vec![entry("compose U", &["composio"])];
+        let corrections = vec![Correction {
+            heard: "compose U".into(),
+            right: "composio".into(),
+            count: 1,
+        }];
+        assert_eq!(
+            enforce_with("use compose U MCP", &entries, &corrections),
+            "use composio MCP"
+        );
+        assert_eq!(
+            enforce_with("use composio MCP", &entries, &corrections),
+            "use composio MCP"
         );
     }
 

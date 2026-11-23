@@ -148,13 +148,33 @@ impl VocabularyEditor {
             if right.is_empty() {
                 continue;
             }
+            let heard = heard.trim();
+            // A correction can say the stored term itself was wrong. Rename
+            // that row instead of adding the right spelling beside it, which
+            // would leave two entries rewriting each other.
+            if let Some(row) = self.rows.iter_mut().find(|row| {
+                !heard.is_empty()
+                    && !heard.eq_ignore_ascii_case(right)
+                    && row.term.text.trim().eq_ignore_ascii_case(heard)
+            }) {
+                let old = row.term.text.trim().to_owned();
+                row.term.text = right.to_owned();
+                let mut sounds = vocabulary::parse_sounds_like(&row.sounds_like.text);
+                sounds.retain(|sound| {
+                    !sound.trim().eq_ignore_ascii_case(right)
+                        && !sound.trim().eq_ignore_ascii_case(&old)
+                });
+                sounds.push(old);
+                row.sounds_like.text = sounds.join(", ");
+                changed = true;
+                continue;
+            }
             if let Some(row) = self
                 .rows
                 .iter_mut()
                 .find(|row| row.term.text.trim().eq_ignore_ascii_case(right))
             {
                 let mut sounds = vocabulary::parse_sounds_like(&row.sounds_like.text);
-                let heard = heard.trim();
                 if !heard.is_empty()
                     && !sounds
                         .iter()
@@ -167,7 +187,7 @@ impl VocabularyEditor {
             } else {
                 self.push(
                     TextEdit::new(right.to_owned()),
-                    TextEdit::new(heard.trim().to_owned()),
+                    TextEdit::new(heard.to_owned()),
                 );
                 changed = true;
             }
@@ -806,6 +826,22 @@ mod tests {
         assert!(editor.merge_learned(&[("Sfax".into(), "Sfax".into())]));
         assert_eq!(editor.project()[1].term, "Sfax");
         assert!(!editor.merge_learned(&[("Gradiom".into(), "Gradium".into())]));
+    }
+
+    #[test]
+    fn a_correction_of_a_stored_term_renames_it() {
+        let mut editor = VocabularyEditor::new(&[VocabularyEntry {
+            term: "compose U".into(),
+            sounds_like: vec!["composio".into()],
+        }]);
+        assert!(editor.merge_learned(&[("compose U".into(), "composio".into())]));
+        assert_eq!(
+            editor.project(),
+            [VocabularyEntry {
+                term: "composio".into(),
+                sounds_like: vec!["compose U".into()],
+            }]
+        );
     }
 
     #[test]

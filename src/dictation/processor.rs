@@ -1506,7 +1506,7 @@ pub(crate) fn classify_vocabulary_correction(
     match generate_cancellable(
         &prompt,
         Some(&model),
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         &AtomicBool::new(false),
     ) {
         Ok(generated) => {
