@@ -377,13 +377,13 @@ mod signin_tests {
         let path = directory.join("gradium.json");
         std::fs::write(
             &path,
-            r#"{"api_key":"gsk_old000000000000","language":"fr","model":"default","boost":5,"learn":false,"corrections":{"a":"b"}}"#,
+            r#"{"api_key":"gsk_old0000000000000","language":"fr","model":"default","boost":5,"learn":false,"corrections":{"a":"b"}}"#,
         )
         .unwrap();
-        save_api_key_at(&path, "  gsk_new000000000000  ").unwrap();
+        save_api_key_at(&path, "  gsk_new0000000000000  ").unwrap();
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(saved["api_key"], "gsk_new000000000000");
+        assert_eq!(saved["api_key"], "gsk_new0000000000000");
         assert_eq!(saved["language"], "fr");
         assert_eq!(saved["model"], "default");
         assert_eq!(saved["boost"], 5);
