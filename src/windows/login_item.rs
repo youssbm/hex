@@ -3,22 +3,26 @@ use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use winreg::RegKey;
-use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+use winreg::RegValue;
+use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, RegType};
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "Hex";
 /// The Startup folder launcher: the user Run list was skipped at one logon,
 /// while the Startup folder still ran its items.
 const LAUNCHER_NAME: &str = "Hex.vbs";
+/// Windows' own enabled/disabled state for a Startup folder item.
+const APPROVED_KEY: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder";
 
-/// Return the Windows-owned startup registration state: the Run value or the
-/// Startup folder launcher, so a launcher written by an earlier version
-/// still reads as on.
+/// Return the startup registration state. The Startup folder launcher is the
+/// registration now; a Run value left by an older version still reads as on
+/// until the next launch migrates it.
 pub fn is_enabled() -> Result<bool> {
-    if run_value_present()? {
-        return Ok(true);
+    if launcher_path().is_some_and(|path| path.exists()) {
+        return launcher_approved();
     }
-    Ok(launcher_path().is_some_and(|path| path.exists()))
+    run_value_present()
 }
 
 fn run_value_present() -> Result<bool> {
@@ -36,31 +40,19 @@ fn run_value_present() -> Result<bool> {
 }
 
 /// Register or unregister the current executable for the current Windows user.
-/// Enabling writes both the Run value Windows Settings lists and a Startup
-/// folder launcher, because one logon on this machine enumerated the user Run
-/// list and executed none of it while the Startup folder still ran.
+/// The Startup folder launcher is the one that runs here; the old Run value is
+/// removed so Windows does not list, or start, Hex twice.
 pub fn set_enabled(enabled: bool) -> Result<()> {
     if enabled {
         let executable = std::env::current_exe().wrap_err("could not locate the Hex executable")?;
-        write_startup_command(&executable, "could not register Hex to launch at login")?;
         let path = launcher_path().ok_or_else(|| eyre!("the Startup folder is unavailable"))?;
         write_launcher_at(&path, &executable)?;
+        set_launcher_approved(true)?;
+        remove_run_value()?;
     } else {
-        let current_user = RegKey::predef(HKEY_CURRENT_USER);
-        match current_user.open_subkey_with_flags(RUN_KEY, KEY_WRITE) {
-            Ok(key) => {
-                if let Err(error) = key.delete_value(VALUE_NAME)
-                    && error.kind() != ErrorKind::NotFound
-                {
-                    return Err(error).wrap_err("could not unregister Hex from Windows startup");
-                }
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).wrap_err("could not open Windows startup applications");
-            }
-        }
         remove_launcher()?;
+        set_launcher_approved(false)?;
+        remove_run_value()?;
     }
     Ok(())
 }
@@ -72,33 +64,96 @@ pub fn repoint(executable: &Path) -> Result<()> {
     if !is_enabled()? {
         return Ok(());
     }
-    write_startup_command(executable, "could not repoint the Hex startup registration")?;
     let Some(path) = launcher_path() else {
         return Ok(());
     };
-    write_launcher_at(&path, executable)
+    write_launcher_at(&path, executable)?;
+    remove_run_value()
 }
 
 /// Writes the Startup folder launcher when Launch at login is on, so a logon
-/// that skips the user Run list still starts Hex. Also refreshes the launcher
-/// after an update. Runs at every launch before the single-instance claim.
+/// that skips the user Run list still starts Hex. Migrates a Run value left by
+/// an older version, and refreshes the launcher after an update. Runs at every
+/// launch before the single-instance claim.
 pub fn ensure_launcher() -> Result<()> {
     let Some(path) = launcher_path() else {
         return Ok(());
     };
-    if !run_value_present()? && !path.exists() {
+    let run = run_value_present()?;
+    if !run && !path.exists() {
         return Ok(());
     }
     let executable = std::env::current_exe().wrap_err("could not locate the Hex executable")?;
-    if launcher_matches(&path, &executable)? {
-        return Ok(());
+    if !launcher_matches(&path, &executable)? {
+        write_launcher_at(&path, &executable)?;
+        tracing::info!(
+            path = %path.display(),
+            "wrote the Startup folder launcher"
+        );
     }
-    write_launcher_at(&path, &executable)?;
-    tracing::info!(
-        path = %path.display(),
-        "wrote the Startup folder launcher"
-    );
+    if run {
+        remove_run_value()?;
+        tracing::info!("moved Launch at login from the Run key to the Startup folder");
+    }
     Ok(())
+}
+
+fn remove_run_value() -> Result<()> {
+    let current_user = RegKey::predef(HKEY_CURRENT_USER);
+    match current_user.open_subkey_with_flags(RUN_KEY, KEY_WRITE) {
+        Ok(key) => {
+            if let Err(error) = key.delete_value(VALUE_NAME)
+                && error.kind() != ErrorKind::NotFound
+            {
+                return Err(error).wrap_err("could not unregister Hex from Windows startup");
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).wrap_err("could not open Windows startup applications"),
+    }
+}
+
+/// Whether Windows still approves the Startup folder launcher. A missing
+/// approval is enabled; the first byte is `1` when Windows disabled it.
+fn launcher_approved() -> Result<bool> {
+    let current_user = RegKey::predef(HKEY_CURRENT_USER);
+    let key = match current_user.open_subkey_with_flags(APPROVED_KEY, KEY_READ) {
+        Ok(key) => key,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(error).wrap_err("could not read Windows startup approvals"),
+    };
+    match key.get_raw_value(LAUNCHER_NAME) {
+        Ok(value) => Ok(approved(&value.bytes)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error).wrap_err("could not read the Hex startup approval"),
+    }
+}
+
+fn approved(bytes: &[u8]) -> bool {
+    bytes.first() != Some(&1)
+}
+
+fn set_launcher_approved(enabled: bool) -> Result<()> {
+    let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey(APPROVED_KEY)
+        .wrap_err("could not open Windows startup approvals")?;
+    if enabled {
+        key.set_raw_value(
+            LAUNCHER_NAME,
+            &RegValue {
+                bytes: vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                vtype: RegType::REG_BINARY,
+            },
+        )
+        .wrap_err("could not approve the Hex startup launcher")
+    } else if let Err(error) = key.delete_value(LAUNCHER_NAME)
+        && error.kind() != ErrorKind::NotFound
+    {
+        Err(error).wrap_err("could not remove the Hex startup approval")
+    } else {
+        Ok(())
+    }
 }
 
 fn launcher_path() -> Option<PathBuf> {
@@ -252,6 +307,14 @@ mod tests {
             "shell.Run \"\"\"C:\\Program Files\\Hex\\hex.exe\"\" app --hidden\", 0, False"
         ));
         assert!(launcher_bytes(&script).starts_with(&[0xFF, 0xFE]));
+    }
+
+    #[test]
+    fn only_the_disabled_startup_approval_reads_off() {
+        assert!(approved(&[3, 0, 0, 0]));
+        assert!(approved(&[2, 0, 0, 0]));
+        assert!(approved(&[]));
+        assert!(!approved(&[1, 0, 0, 0]));
     }
 
     #[test]
