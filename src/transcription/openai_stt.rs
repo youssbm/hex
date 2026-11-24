@@ -18,6 +18,8 @@ use serde::Deserialize;
 
 use crate::dictation::vocabulary::VocabularyEntry;
 
+pub(crate) mod keepalive;
+
 const API_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const CODEX_URL: &str = "https://chatgpt.com/backend-api/transcribe";
 const MAX_AUDIO_BYTES: usize = 25 * 1024 * 1024;
@@ -213,11 +215,18 @@ static SIGN_IN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// after the sign-in succeeds, so a failed attempt does not switch dictation
 /// to a cloud model that cannot answer.
 pub(crate) fn sign_in() -> Result<SignIn> {
-    let _guard = SIGN_IN.lock().unwrap_or_else(|error| error.into_inner());
-    sign_in_locked()
+    sign_in_locked(None)
 }
 
-fn sign_in_locked() -> Result<SignIn> {
+/// Renews the Codex token when it has less than `within` left, even if it has
+/// not expired yet. The background renewal uses this; the Sign in sheet only
+/// refreshes an expired token.
+pub(crate) fn renew_before(within: Duration) -> Result<SignIn> {
+    sign_in_locked(Some(within))
+}
+
+fn sign_in_locked(renew_within: Option<Duration>) -> Result<SignIn> {
+    let _guard = SIGN_IN.lock().unwrap_or_else(|error| error.into_inner());
     let stored = config_path().and_then(|path| std::fs::read_to_string(path).ok());
     let parsed = stored
         .as_deref()
@@ -243,7 +252,7 @@ fn sign_in_locked() -> Result<SignIn> {
         }
         SignIn::ApiKey
     } else if backend == "codex_session" {
-        sign_in_codex(&config)?
+        sign_in_codex(&config, renew_within)?
     } else {
         return Err(eyre!(
             "unknown OpenAI STT backend {:?} (use api_key or codex_session)",
@@ -256,7 +265,7 @@ fn sign_in_locked() -> Result<SignIn> {
     Ok(result)
 }
 
-fn sign_in_codex(config: &Config) -> Result<SignIn> {
+fn sign_in_codex(config: &Config, renew_within: Option<Duration>) -> Result<SignIn> {
     let path = codex_auth_path(config)?;
     let text = std::fs::read_to_string(&path).map_err(|_| {
         eyre!(
@@ -272,10 +281,12 @@ fn sign_in_codex(config: &Config) -> Result<SignIn> {
         .unwrap_or("")
         .trim()
         .to_owned();
-    if !access.is_empty() && !jwt_expired(&access) {
-        return Ok(SignIn::AlreadySignedIn {
-            expires_in: jwt_expiry(&access).map(remaining),
-        });
+    let expires_in = jwt_expiry(&access).map(remaining);
+    let fresh = !access.is_empty()
+        && !jwt_expired(&access)
+        && renew_within.is_none_or(|within| expires_in.is_some_and(|left| left > within));
+    if fresh {
+        return Ok(SignIn::AlreadySignedIn { expires_in });
     }
     let refresh = root
         .pointer("/tokens/refresh_token")
