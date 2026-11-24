@@ -1,15 +1,27 @@
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, eyre};
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "Hex";
+/// The Startup folder launcher: the user Run list was skipped at one logon,
+/// while the Startup folder still ran its items.
+const LAUNCHER_NAME: &str = "Hex.vbs";
 
-/// Return the Windows-owned startup registration state.
+/// Return the Windows-owned startup registration state: the Run value or the
+/// Startup folder launcher, so a launcher written by an earlier version
+/// still reads as on.
 pub fn is_enabled() -> Result<bool> {
+    if run_value_present()? {
+        return Ok(true);
+    }
+    Ok(launcher_path().is_some_and(|path| path.exists()))
+}
+
+fn run_value_present() -> Result<bool> {
     let current_user = RegKey::predef(HKEY_CURRENT_USER);
     let key = match current_user.open_subkey_with_flags(RUN_KEY, KEY_READ) {
         Ok(key) => key,
@@ -24,24 +36,31 @@ pub fn is_enabled() -> Result<bool> {
 }
 
 /// Register or unregister the current executable for the current Windows user.
+/// Enabling writes both the Run value Windows Settings lists and a Startup
+/// folder launcher, because one logon on this machine enumerated the user Run
+/// list and executed none of it while the Startup folder still ran.
 pub fn set_enabled(enabled: bool) -> Result<()> {
     if enabled {
         let executable = std::env::current_exe().wrap_err("could not locate the Hex executable")?;
         write_startup_command(&executable, "could not register Hex to launch at login")?;
+        let path = launcher_path().ok_or_else(|| eyre!("the Startup folder is unavailable"))?;
+        write_launcher_at(&path, &executable)?;
     } else {
         let current_user = RegKey::predef(HKEY_CURRENT_USER);
-        let key = match current_user.open_subkey_with_flags(RUN_KEY, KEY_WRITE) {
-            Ok(key) => key,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        match current_user.open_subkey_with_flags(RUN_KEY, KEY_WRITE) {
+            Ok(key) => {
+                if let Err(error) = key.delete_value(VALUE_NAME)
+                    && error.kind() != ErrorKind::NotFound
+                {
+                    return Err(error).wrap_err("could not unregister Hex from Windows startup");
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(error).wrap_err("could not open Windows startup applications");
             }
-        };
-        if let Err(error) = key.delete_value(VALUE_NAME)
-            && error.kind() != ErrorKind::NotFound
-        {
-            return Err(error).wrap_err("could not unregister Hex from Windows startup");
         }
+        remove_launcher()?;
     }
     Ok(())
 }
@@ -53,7 +72,86 @@ pub fn repoint(executable: &Path) -> Result<()> {
     if !is_enabled()? {
         return Ok(());
     }
-    write_startup_command(executable, "could not repoint the Hex startup registration")
+    write_startup_command(executable, "could not repoint the Hex startup registration")?;
+    let Some(path) = launcher_path() else {
+        return Ok(());
+    };
+    write_launcher_at(&path, executable)
+}
+
+/// Writes the Startup folder launcher when Launch at login is on, so a logon
+/// that skips the user Run list still starts Hex. Also refreshes the launcher
+/// after an update. Runs at every launch before the single-instance claim.
+pub fn ensure_launcher() -> Result<()> {
+    let Some(path) = launcher_path() else {
+        return Ok(());
+    };
+    if !run_value_present()? && !path.exists() {
+        return Ok(());
+    }
+    let executable = std::env::current_exe().wrap_err("could not locate the Hex executable")?;
+    if launcher_matches(&path, &executable)? {
+        return Ok(());
+    }
+    write_launcher_at(&path, &executable)?;
+    tracing::info!(
+        path = %path.display(),
+        "wrote the Startup folder launcher"
+    );
+    Ok(())
+}
+
+fn launcher_path() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|appdata| {
+        PathBuf::from(appdata)
+            .join(r"Microsoft\Windows\Start Menu\Programs\Startup")
+            .join(LAUNCHER_NAME)
+    })
+}
+
+fn launcher_script(executable: &Path) -> String {
+    format!(
+        "Set shell = CreateObject(\"WScript.Shell\")\r\nshell.Run \"\"\"{}\"\" app --hidden\", 0, False\r\n",
+        executable.display()
+    )
+}
+
+fn launcher_bytes(script: &str) -> Vec<u8> {
+    // WSH reads UTF-16LE with a BOM, which keeps non-ASCII profile paths.
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in script.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
+}
+
+fn write_launcher_at(path: &Path, executable: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).wrap_err("could not create the Startup folder")?;
+    }
+    let temporary = path.with_extension("vbs.tmp");
+    std::fs::write(&temporary, launcher_bytes(&launcher_script(executable)))
+        .wrap_err("could not write the Startup folder launcher")?;
+    std::fs::rename(&temporary, path).wrap_err("could not replace the Startup folder launcher")?;
+    Ok(())
+}
+
+fn launcher_matches(path: &Path, executable: &Path) -> Result<bool> {
+    let Ok(existing) = std::fs::read(path) else {
+        return Ok(false);
+    };
+    Ok(existing == launcher_bytes(&launcher_script(executable)))
+}
+
+fn remove_launcher() -> Result<()> {
+    let Some(path) = launcher_path() else {
+        return Ok(());
+    };
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).wrap_err("could not remove the Startup folder launcher"),
+    }
 }
 
 /// Points Launch at login at this Hex when it starts another version of the
@@ -145,6 +243,29 @@ mod tests {
             startup_command(Path::new(r"C:\Program Files\Hex\hex.exe")),
             r#""C:\Program Files\Hex\hex.exe" app --hidden"#
         );
+    }
+
+    #[test]
+    fn the_launcher_runs_the_app_hidden() {
+        let script = launcher_script(Path::new(r"C:\Program Files\Hex\hex.exe"));
+        assert!(script.contains(
+            "shell.Run \"\"\"C:\\Program Files\\Hex\\hex.exe\"\" app --hidden\", 0, False"
+        ));
+        assert!(launcher_bytes(&script).starts_with(&[0xFF, 0xFE]));
+    }
+
+    #[test]
+    fn a_changed_executable_rewrites_the_launcher() {
+        let directory = std::env::temp_dir().join(format!("hex-login-item-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("Hex.vbs");
+        let old = Path::new(r"C:\Old\hex.exe");
+        write_launcher_at(&path, old).unwrap();
+        assert!(launcher_matches(&path, old).unwrap());
+        assert!(!launcher_matches(&path, Path::new(r"C:\New\hex.exe")).unwrap());
+        assert_eq!(&std::fs::read(&path).unwrap()[..2], &[0xFF, 0xFE]);
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     /// Setup or install-windows.ps1 put 3.4.0 over 3.3.0 and left Launch at

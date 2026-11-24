@@ -175,6 +175,9 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
     if let Err(error) = crate::windows::login_item::follow_current_version() {
         tracing::warn!(%error, "could not point Launch at login at this version of Hex");
     }
+    if let Err(error) = crate::windows::login_item::ensure_launcher() {
+        tracing::warn!(%error, "could not write the Startup folder launcher");
+    }
     let Some(instance) = crate::windows::app::AppInstance::claim(start_hidden)? else {
         return Ok(());
     };

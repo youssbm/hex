@@ -148,6 +148,35 @@ pub(crate) fn restrict_dll_search() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Appends one line to `launch.log` before logging starts. A logon launch
+/// that dies before the process log still leaves a timestamp and arguments,
+/// and a launch that never happened leaves none.
+pub(crate) fn note_launch_attempt() {
+    let Ok(directory) = crate::app_paths::logs_dir() else {
+        return;
+    };
+    if std::fs::create_dir_all(&directory).is_err() {
+        return;
+    }
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|now| now.as_secs())
+        .unwrap_or(0);
+    let args = std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let line = format!("unix={seconds} pid={} args={args}\n", std::process::id());
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.join("launch.log"))
+    {
+        use std::io::Write as _;
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
 pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
     color_eyre::install()?;
     // Parse first so `--version` and `--help` exit without creating app data.
@@ -155,6 +184,9 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         hidden: false,
         rune_args: Vec::new(),
     });
+    if matches!(&command, Command::App { .. } | Command::Listen { .. }) {
+        note_launch_attempt();
+    }
     // Control and read commands talk to the running Hex or read files: no
     // log, lock, or Hex of their own.
     if let Command::Control(command) = command {
