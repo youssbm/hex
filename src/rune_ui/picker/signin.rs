@@ -17,7 +17,7 @@ use crate::transcription::models::TranscriptionModelId;
 use crate::transcription::openai_stt::{self, SignIn as OpenAiSignIn};
 
 pub(super) const WIDTH: f32 = 560.0;
-const FIELD_WIDTH: f32 = WIDTH - 48.0;
+const FIELD_WIDTH: f32 = WIDTH - 50.0;
 
 #[derive(Default)]
 pub(super) struct SignIn {
@@ -96,7 +96,9 @@ fn gradium_body(ui: &Ui, p: Paint) -> El {
         .color(p.muted())
         .wrap(),
     );
-    if let Some(hint) = &state.hint {
+    if !state.saved
+        && let Some(hint) = &state.hint
+    {
         body = body.child(note(
             "key-hint",
             &tr_fill(

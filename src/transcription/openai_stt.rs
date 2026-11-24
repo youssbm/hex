@@ -203,12 +203,21 @@ fn config_path() -> Option<std::path::PathBuf> {
         .map(|dir| dir.join("openai-stt.json"))
 }
 
+/// One refresh at a time: spending a refresh token rotates it, so two
+/// overlapping Sign in presses must not both spend the same token.
+static SIGN_IN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Signs in to the selected OpenAI backend. The Codex session is refreshed
 /// from its auth file with the same grant Codex uses; an API-key backend only
 /// checks that a key is saved. A missing `openai-stt.json` is written only
 /// after the sign-in succeeds, so a failed attempt does not switch dictation
 /// to a cloud model that cannot answer.
 pub(crate) fn sign_in() -> Result<SignIn> {
+    let _guard = SIGN_IN.lock().unwrap_or_else(|error| error.into_inner());
+    sign_in_locked()
+}
+
+fn sign_in_locked() -> Result<SignIn> {
     let stored = config_path().and_then(|path| std::fs::read_to_string(path).ok());
     let parsed = stored
         .as_deref()
@@ -251,7 +260,7 @@ fn sign_in_codex(config: &Config) -> Result<SignIn> {
     let path = codex_auth_path(config)?;
     let text = std::fs::read_to_string(&path).map_err(|_| {
         eyre!(
-            "no Codex session was found at {}; run `codex login` on this computer, then try again",
+            "no Codex session was found at {}; run codex login on this computer, then try again",
             path.display()
         )
     })?;
@@ -276,7 +285,7 @@ fn sign_in_codex(config: &Config) -> Result<SignIn> {
         .to_owned();
     if refresh.is_empty() {
         return Err(eyre!(
-            "the Codex session has no refresh token; run `codex login` on this computer, then try again"
+            "the Codex session has no refresh token; run codex login on this computer, then try again"
         ));
     }
     refresh_codex(&path, &mut root, &refresh)?;
@@ -341,7 +350,7 @@ fn refresh_codex(
         .wrap_err("could not read OpenAI's refresh answer")?;
     if !status.is_success() {
         let advice = if status.as_u16() == 401 {
-            "Run `codex login` on this computer, then try again. Nothing was changed."
+            "run codex login on this computer, then try again. Nothing was changed."
         } else {
             "Nothing was changed."
         };
