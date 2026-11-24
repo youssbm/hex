@@ -45,7 +45,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked rune_ui::vocabulary
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked rune_ui::picker
+          cargo test --locked rune_ui::picker::signin
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked transcription::gguf_session::tests::auto_needs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
